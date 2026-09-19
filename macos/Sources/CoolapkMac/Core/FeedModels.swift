@@ -139,6 +139,11 @@ struct FeedItem: Identifiable, Hashable {
         guard text.count <= 30 else { return false }
         return text.range(of: "^.{0,24} ?的动态$", options: .regularExpression) != nil
     }
+
+    /// 实体缺 dateline 时是 1970 纪元,相对时间会显示"56年前",视为无效。
+    var hasValidDateline: Bool {
+        dateline.timeIntervalSince1970 > 100_000_000
+    }
 }
 
 /// 搜索结果分组(接口按 话题/应用/用户/帖子 分组返回)。

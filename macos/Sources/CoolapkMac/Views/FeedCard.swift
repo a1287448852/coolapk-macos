@@ -63,8 +63,10 @@ struct FeedCardView: View {
 
     private var metaRow: some View {
         HStack(spacing: 6) {
-            Text(feed.dateline, format: .coolapkRelative)
-                .lineLimit(1)
+            if feed.hasValidDateline {
+                Text(feed.dateline, format: .coolapkRelative)
+                    .lineLimit(1)
+            }
 
             if !feed.deviceTitle.isEmpty {
                 metaChip(feed.deviceTitle, systemImage: "smartphone")
@@ -130,8 +132,9 @@ struct FeedCardView: View {
 
 // MARK: - 卡片图片网格
 
-/// 自适应图片网格:单张横排大图(高 300,≤320 上限);
-/// 2-3 张等宽横排;>3 张 3 列方格;最多展示 9 张。
+/// 自适应图片网格:单张横幅大图;2-3 张等宽横排;>3 张 3 列方格;最多展示 9 张。
+/// 所有格子用 Color.clear 吸收布局提案宽度,贴图 overlay + clipped,
+/// 杜绝 scaledToFill 大图按原始尺寸撑爆卡片。
 private struct FeedCardImageGrid: View {
     let urls: [URL]
 
@@ -139,17 +142,12 @@ private struct FeedCardImageGrid: View {
         let shown = Array(urls.prefix(9))
         Group {
             if shown.count == 1, let only = shown.first {
-                RemoteImage(url: only)
-                    .frame(height: 300)
-                    .frame(maxWidth: 520, alignment: .leading)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                boundedCell(url: only, height: 200)
+                    .frame(maxWidth: 460, alignment: .leading)
             } else if shown.count <= 3 {
                 HStack(alignment: .top, spacing: 6) {
                     ForEach(shown, id: \.absoluteString) { url in
-                        RemoteImage(url: url)
-                            .frame(height: 150)
-                            .frame(maxWidth: .infinity)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                        boundedCell(url: url, height: 140)
                     }
                 }
             } else {
@@ -162,14 +160,22 @@ private struct FeedCardImageGrid: View {
                     spacing: 6
                 ) {
                     ForEach(shown, id: \.absoluteString) { url in
-                        RemoteImage(url: url)
-                            .aspectRatio(1, contentMode: .fill)
-                            .frame(minWidth: 0)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        boundedCell(url: url, height: 110)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 固定高度 + 宽度由布局提案决定;图片 fill 后强制裁切。
+    private func boundedCell(url: URL, height: CGFloat) -> some View {
+        Color.clear
+            .frame(height: height)
+            .overlay {
+                RemoteImage(url: url)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipped()
     }
 }

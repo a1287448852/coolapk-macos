@@ -233,11 +233,6 @@ struct FeedListView: View {
             }
         }
         .refreshable { await model.refresh() }
-        .searchable(
-            text: $model.searchQuery,
-            placement: .toolbar,
-            prompt: "搜索酷安"
-        )
         .onSubmit(of: .search) {
             Task { await model.runSearch() }
         }
@@ -684,11 +679,13 @@ struct PicGrid: View {
         let shown = urls.prefix(maxDisplay)
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 8)], spacing: 8) {
             ForEach(shown, id: \.absoluteString) { url in
-                RemoteImage(url: url)
-                    .aspectRatio(1, contentMode: .fill)
-                    .frame(minWidth: 0)
+                Color.clear
+                    .frame(height: 150)
+                    .overlay {
+                        RemoteImage(url: url)
+                    }
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .frame(maxHeight: 220)
+                    .clipped()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -720,10 +717,12 @@ struct FeedRowView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Text(feed.dateline, format: .coolapkRelative)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                    if feed.hasValidDateline {
+                        Text(feed.dateline, format: .coolapkRelative)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
 
                 if !feed.displayText.isEmpty {
