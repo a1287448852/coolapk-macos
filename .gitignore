@@ -35,3 +35,15 @@ raw_debug.json
 Thumbs.db
 desktop.ini
 coolapk_all_decompiled/
+
+# Rust 核心库构建产物与生成物(macos/scripts/sync-bindings.sh 重建)
+crates/coolapk-core/target/
+crates/coolapk-core/bindings/
+
+# Swift / SPM 构建产物与生成物(make_app.sh / sync-bindings.sh 重建)
+.build/
+macos/.build/
+macos/build/
+macos/Vendor/
+macos/Sources/CoolapkCoreSwift/
+macos/Sources/CoolapkCoreFFI/include/

@@ -37,6 +37,7 @@ hmac = "0.12"
 sha1 = "0.10"
 chrono = "0.4"
 anyhow = "1.0"
+coolapk-core = { path = "../crates/coolapk-core" }
 tracing = "0.1"
 opener = "0.7"
 

@@ -1,0 +1,28 @@
+[package]
+name = "coolapk-core"
+version = "1.21.0"
+edition = "2024"
+license = "MIT"
+description = "酷安 API 核心库:Token V3 签名与 API 客户端(从 coolapk-desktop 的 src-tauri 抽出,供 macOS 原生客户端复用)"
+
+[lib]
+name = "coolapk_core"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+bcrypt = "0.15"
+md-5 = "0.10"
+hex = "0.4"
+chrono = "0.4"
+hmac = "0.12"
+sha1 = "0.10"
+reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "multipart"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.36", features = ["full"] }
+uniffi = { version = "0.32", features = ["cli", "tokio"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

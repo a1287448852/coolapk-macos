@@ -1,4 +1,4 @@
-use crate::coolapk::auth::CoolapkAuth;
+use crate::auth::CoolapkAuth;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use reqwest::header::{COOKIE, HeaderMap, HeaderValue, LOCATION, USER_AGENT};
 use reqwest::{Client, Method};
