@@ -210,10 +210,63 @@ final class AppModel {
         }
     }
 
+    // MARK: 话题动态(点热门话题挂件进入)
+
+    private(set) var selectedTopicTag: String?
+    private(set) var topicFeeds: [FeedItem] = []
+    private(set) var topicStatus = ""
+    private var topicPage = 1
+
+    func openTopic(tag: String) async {
+        guard selectedTopicTag != tag else { return }
+        selectedTopicTag = tag
+        // 话题面板优先于详情:点话题即退出详情浏览
+        selectedFeedID = nil
+        detail = nil
+        detailError = nil
+        replies = []
+        topicFeeds = []
+        await loadTopicFeeds(reset: true)
+    }
+
+    func closeTopic() {
+        selectedTopicTag = nil
+        topicFeeds = []
+    }
+
+    func loadTopicFeeds(reset: Bool) async {
+        guard let tag = selectedTopicTag else { return }
+        if reset { topicPage = 1 }
+        topicStatus = ""
+        do {
+            let json = try await api.getTopicFeeds(tag: tag, page: UInt32(topicPage))
+            let parsed = CoolapkJSON.entities(fromJSONString: json)
+                .compactMap(FeedItem.init(entity:))
+            if reset {
+                topicFeeds = parsed
+            } else {
+                let known = Set(topicFeeds.map(\.id))
+                topicFeeds += parsed.filter { !known.contains($0.id) }
+            }
+            if reset { topicPage = 2 } else { topicPage += 1 }
+            if topicFeeds.isEmpty { topicStatus = "该话题暂无动态" }
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { topicStatus = "加载失败:\(Self.friendlyError(message))" }
+        } catch {
+            topicStatus = "加载失败:\(error.localizedDescription)"
+        }
+    }
+
     // MARK: 登录会话
 
     private(set) var userProfile: UserProfile?
     private(set) var loginError: String?
+
+    /// 弹窗内"重试登录"前清掉上次的错误。
+    func clearLoginError() {
+        loginError = nil
+    }
+    private(set) var isCompletingLogin = false
 
     /// 启动时恢复已保存的登录态(accounts.json 有 cookie 时拉资料)。
     func restoreSession() async {
@@ -223,13 +276,16 @@ final class AppModel {
     }
 
     /// 登录窗口带回完整 cookie 后:设置会话 → 拉资料 → 写入账户库。
+    /// 校验结果落在 loginError / userProfile 上,弹窗据此决定关闭还是显示错误。
     func completeLogin(cookie: String) async {
         loginError = nil
+        isCompletingLogin = true
+        defer { isCompletingLogin = false }
         do {
             try api.setUserCookie(cookie: cookie)
             await refreshProfile()
             if userProfile == nil {
-                loginError = "登录凭据已收到,但用户资料校验失败,请重试"
+                loginError = "会话已提取,但资料校验失败(可能被风控拦截)。请点击重试重新登录。"
             }
         } catch let error as CoolapkError {
             if case .Failed(let message) = error { loginError = Self.friendlyError(message) }
@@ -380,6 +436,9 @@ final class AppModel {
     func select(feedID: String) async {
         guard selectedFeedID != feedID else { return }
         selectedFeedID = feedID
+        // 详情优先于话题面板:点卡片即退出话题浏览
+        selectedTopicTag = nil
+        topicFeeds = []
         detail = nil
         detailError = nil
         replies = []

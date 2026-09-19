@@ -1,12 +1,13 @@
 import SwiftUI
 import WebKit
 
-/// 登录窗口:复刻上游 Tauri 登录链路。
-/// logout(清网页旧会话) → login?type=coolapk → 服务端带 `ck` 参数回跳本地 auth_callback,
-/// WKWebView 在导航层拦截回调 URL,同时合并 Cookie 存储里的会话字段(覆盖 HttpOnly 丢失问题)。
+/// 登录窗口:复刻上游 Tauri 登录链路,并叠加两层保险:
+/// 1. 每 2 秒轮询 Cookie 存储,站点登录成功后无论跳到哪个页面都能提取会话;
+/// 2. 提取后由 AppModel 校验(user/space),弹窗内显示校验中/失败状态,失败可重试。
 struct LoginView: View {
-    let onCookie: (String) -> Void
+    let model: AppModel
     @Environment(\.dismiss) private var dismiss
+    @State private var reloadTrigger = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,12 +27,40 @@ struct LoginView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
 
-            LoginWebView { cookie in
-                onCookie(cookie)
-                dismiss()
+            ZStack {
+                LoginWebView { cookie in
+                    Task { await model.completeLogin(cookie: cookie) }
+                }
+                .id(reloadTrigger)
+
+                if model.isCompletingLogin {
+                    ProgressView("校验会话…")
+                        .padding(20)
+                        .background(.bar, in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
+
+            if let error = model.loginError {
+                VStack(spacing: 6) {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                    Button("重试登录") {
+                        model.clearLoginError()
+                        reloadTrigger = UUID()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.socialGreen)
+                }
+                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
             }
         }
         .frame(width: 420, height: 640)
+        .onChange(of: model.userProfile) { _, profile in
+            if profile != nil { dismiss() }
+        }
     }
 }
 
@@ -82,18 +111,38 @@ struct LoginWebView: NSViewRepresentable {
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
 
+        // 先检查持久化存储里的既有会话:上一轮登录可能已经成功但站点没按
+        // forward 回跳(跳去了推广页),cookie 仍留在 WKWebsiteDataStore 里。
+        // 有有效会话直接完成登录;没有才走 logout 清理 → 登录页链路。
+        config.websiteDataStore.httpCookieStore.getAllCookies { cookies in
+            let hasSession = LoginCoordinator.hasSessionCookies(cookies)
+            Task { @MainActor in
+                if hasSession {
+                    context.coordinator.complete(
+                        with: LoginCoordinator.merge(ck: "", webviewCookies: cookies)
+                    )
+                } else {
+                    webView.load(URLRequest(url: Self.logoutChainURL()))
+                    context.coordinator.startPolling(store: config.websiteDataStore)
+                }
+            }
+        }
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {}
+
+    static func logoutChainURL() -> URL {
         // 先 logout 清旧会话,forward 指向登录页,登录页再 forward 回本地回调地址
         let targetLogin = "https://account.coolapk.com/auth/login?type=coolapk&forward="
             + (Self.appOrigin + "/#/auth_callback")
             .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
         let loginURL = "https://account.coolapk.com/auth/logout?forward="
             + targetLogin.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!
-        webView.load(URLRequest(url: URL(string: loginURL)!))
-        return webView
+        return URL(string: loginURL)!
     }
-
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
 
     func makeCoordinator() -> LoginCoordinator {
         LoginCoordinator(onCookie: onCookie)
@@ -103,10 +152,56 @@ struct LoginWebView: NSViewRepresentable {
 @MainActor
 final class LoginCoordinator: NSObject, WKNavigationDelegate {
     let onCookie: (String) -> Void
+    weak var webView: WKWebView?
     private var captured = false
 
     init(onCookie: @escaping (String) -> Void) {
         self.onCookie = onCookie
+    }
+
+    /// 判定 cookie 存储里是否已有有效登录会话(uid>0 且 SESSID 非占位值)。
+    static func hasSessionCookies(_ cookies: [HTTPCookie]) -> Bool {
+        let coolapkCookies = cookies.filter { $0.domain.hasSuffix("coolapk.com") }
+        let uid = coolapkCookies.first { $0.name == "uid" }?.value ?? ""
+        let sessid = coolapkCookies.first { $0.name == "SESSID" }?.value ?? ""
+        guard (Int(uid) ?? 0) > 0 else { return false }
+        let placeholders = ["", "deleted", "expired", "0"]
+        return !placeholders.contains(sessid.lowercased())
+    }
+
+    /// 统一的登录完成出口:只执行一次。
+    func complete(with cookie: String) {
+        guard !captured else { return }
+        captured = true
+        onCookie(cookie)
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        // 离开登录域去往本地回调时,阻止真正的加载(本地没有服务在监听)
+    }
+
+    /// 每 2 秒检查一次 Cookie 存储:站点登录成功后无论跳到哪个页面(实测会跳
+    /// 去推广页而非回调地址),都能在 2 秒内提取到会话。上限 5 分钟。
+    func startPolling(store: WKWebsiteDataStore) {
+        Task { @MainActor [weak self] in
+            for _ in 0..<150 {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self, !self.captured else { return }
+                let cookies = await Self.allCookies(from: store)
+                if Self.hasSessionCookies(cookies) {
+                    self.complete(with: Self.merge(ck: "", webviewCookies: cookies))
+                    return
+                }
+            }
+        }
+    }
+
+    nonisolated private static func allCookies(from store: WKWebsiteDataStore) async -> [HTTPCookie] {
+        await withCheckedContinuation { continuation in
+            store.httpCookieStore.getAllCookies { cookies in
+                continuation.resume(returning: cookies)
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -115,8 +210,11 @@ final class LoginCoordinator: NSObject, WKNavigationDelegate {
             decisionHandler(.allow)
             return
         }
-        let absolute = url.absoluteString
-        if absolute.contains("auth_callback") {
+        // 只有真正导航到本地回调源才算登录完成。登录页自身的 URL 会携带
+        // forward=...auth_callback 参数,用字符串 contains 会把登录页误判成回调,
+        // 导致弹窗刚打开就被 dismiss(表现为"闪一下")。
+        let isLocalCallback = url.host == "127.0.0.1" && url.port == 17520
+        if isLocalCallback {
             guard !captured else {
                 decisionHandler(.cancel)
                 return
@@ -124,7 +222,7 @@ final class LoginCoordinator: NSObject, WKNavigationDelegate {
             captured = true
             decisionHandler(.cancel)
 
-            let ck = Self.extractCookieParam(from: absolute) ?? ""
+            let ck = Self.extractCookieParam(from: url.absoluteString) ?? ""
             webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { [onCookie] cookies in
                 let merged = Self.merge(ck: ck, webviewCookies: cookies)
                 Task { @MainActor in onCookie(merged) }

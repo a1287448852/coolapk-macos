@@ -107,16 +107,22 @@ struct HotPanel: View {
                 loadingPlaceholder
             } else {
                 ForEach(model.hotPanelTopics, id: \.id) { topic in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(topic.title)
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Spacer(minLength: 8)
-                        Label("\(topic.hotNum)", systemImage: "flame")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
+                    Button {
+                        Task { await model.openTopic(tag: topic.title) }
+                    } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(topic.title)
+                                .font(.subheadline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            Label("\(topic.hotNum)", systemImage: "flame")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .padding(.vertical, 3)
                 }
             }
@@ -147,5 +153,59 @@ struct HotPanel: View {
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .padding(.vertical, 24)
+    }
+}
+
+// MARK: - 话题动态面板
+
+/// 从热门话题挂件点入:展示该话题下的动态列表。
+struct TopicPanelView: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    model.closeTopic()
+                } label: {
+                    Label("返回热榜", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+
+                Text("#\(model.selectedTopicTag ?? "")#")
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            List(model.topicFeeds) { feed in
+                FeedRowView(feed: feed)
+                    .onAppear {
+                        if feed.id == model.topicFeeds.last?.id {
+                            Task { await model.loadTopicFeeds(reset: false) }
+                        }
+                    }
+            }
+            .listStyle(.inset)
+            .overlay {
+                if model.topicFeeds.isEmpty {
+                    ContentUnavailableView(
+                        "#\(model.selectedTopicTag ?? "")#",
+                        systemImage: "number",
+                        description: Text(model.topicStatus.isEmpty ? "加载中…" : model.topicStatus)
+                    )
+                }
+            }
+        }
+        .navigationTitle("#\(model.selectedTopicTag ?? "")#")
+        .refreshable { await model.loadTopicFeeds(reset: true) }
+        .task {
+            if model.topicFeeds.isEmpty { await model.loadTopicFeeds(reset: true) }
+        }
     }
 }

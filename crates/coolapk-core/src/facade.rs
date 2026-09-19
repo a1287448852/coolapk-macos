@@ -190,6 +190,18 @@ impl CoolapkApi {
         )
     }
 
+    // MARK: 话题
+
+    /// 话题动态列表(游客可用;tag 形如 "数码日常")。
+    pub async fn get_topic_feeds(&self, tag: String, page: u32) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .get_topic_feeds(&tag, page, "", "", "", 0)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
     // MARK: 应用与用户
 
     pub async fn get_app_detail(&self, package_name: String) -> UniResult<String> {

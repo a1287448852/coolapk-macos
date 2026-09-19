@@ -45,11 +45,17 @@ struct ContentView: View {
         }
     }
 
-    /// 右列:feed 入口且有选中 → 详情;否则默认热榜挂件面板。
+    /// 右列:话题面板 → 详情 → 默认热榜挂件面板。
     @ViewBuilder
     private var detailColumn: some View {
-        if case .feed = model.entry, model.selectedFeedID != nil {
-            FeedDetailView(model: model)
+        if case .feed = model.entry {
+            if model.selectedTopicTag != nil {
+                TopicPanelView(model: model)
+            } else if model.selectedFeedID != nil {
+                FeedDetailView(model: model)
+            } else {
+                HotPanel(model: model)
+            }
         } else {
             HotPanel(model: model)
         }
@@ -190,10 +196,6 @@ struct FeedListView: View {
         }
         .navigationTitle(currentTitle)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text(currentTitle)
-                    .font(.headline)
-            }
             if model.isSearchActive {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -257,9 +259,7 @@ struct FeedListView: View {
             }
         }
         .sheet(isPresented: $model.showLoginSheet) {
-            LoginView { cookie in
-                Task { await model.completeLogin(cookie: cookie) }
-            }
+            LoginView(model: model)
         }
     }
 
@@ -410,16 +410,37 @@ struct FeedDetailView: View {
                 ProgressView("加载详情…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.selectedFeedID != nil {
-                // 详情可能因服务端风控(403 验证码)失败:错误提示 + 照常展示评论
+                // 详情接口被风控(403 验证码)时:用列表实体的摘要渲染轻详情,
+                // 风控提示降级为一行小字,评论照常展示。
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        if let error = model.detailError {
-                            Label(error, systemImage: "exclamationmark.shield")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(12)
-                                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                        if let item = model.feeds.first(where: { $0.id == model.selectedFeedID }) {
+                            HStack(spacing: 10) {
+                                AvatarView(url: item.avatarURL, size: 40)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.username)
+                                        .font(.headline)
+                                    Text(item.dateline, format: .coolapkRelative)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            if !item.displayText.isEmpty {
+                                Text(item.displayText)
+                                    .font(.body)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            if !item.picURLs.isEmpty {
+                                PicGrid(urls: item.picURLs)
+                            }
+                            Divider()
+                        }
+                        if let error = model.detailError, !error.isEmpty {
+                            Text("完整详情被风控拦截(\(error)),已显示摘要")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
                         }
                         commentSection
                     }
