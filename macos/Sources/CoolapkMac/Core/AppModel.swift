@@ -16,8 +16,10 @@ extension CoolapkApi {
 
 /// 侧栏信息流分类。
 enum FeedCategory: String, CaseIterable, Identifiable, Hashable {
-    case recommend = "推荐"
+    case home = "首页"
+    case headline = "头条"
     case hot = "热门"
+    case digest = "快讯"
     case month = "月榜"
     case favorite = "收藏榜"
     case reply = "回复榜"
@@ -28,14 +30,79 @@ enum FeedCategory: String, CaseIterable, Identifiable, Hashable {
 
     var systemImage: String {
         switch self {
-        case .recommend: "sparkles"
+        case .home: "house"
+        case .headline: "newspaper"
         case .hot: "flame"
+        case .digest: "bolt"
         case .month: "calendar"
         case .favorite: "star"
         case .reply: "bubble.left.and.bubble.right"
         case .picture: "photo.on.rectangle"
         case .latest: "clock"
         }
+    }
+}
+
+/// 侧栏入口:信息流分类 + 个人功能区。
+enum SidebarEntry: Hashable, Identifiable {
+    case feed(FeedCategory)
+    case notifications, messages, favorites, following, history, downloads
+
+    var id: String {
+        switch self {
+        case .feed(let category): "feed-\(category.rawValue)"
+        case .notifications: "notifications"
+        case .messages: "messages"
+        case .favorites: "favorites"
+        case .following: "following"
+        case .history: "history"
+        case .downloads: "downloads"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .feed(let category): category.rawValue
+        case .notifications: "通知"
+        case .messages: "消息"
+        case .favorites: "收藏"
+        case .following: "我关注的"
+        case .history: "历史"
+        case .downloads: "下载"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .feed(let category): category.systemImage
+        case .notifications: "bell"
+        case .messages: "message"
+        case .favorites: "bookmark"
+        case .following: "person.2"
+        case .history: "clock.arrow.circlepath"
+        case .downloads: "arrow.down.circle"
+        }
+    }
+}
+
+/// 个人功能区的列表类型(收藏榜信息流之外的个人收藏/关注/历史)。
+enum PersonalListKind: String { case favorites, following, history }
+
+/// 详情栏"热门话题"挂件条目(容错解析;实际返回 {"tag","count"})。
+struct HotTopicItem: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let hotNum: Int
+
+    init?(entity: [String: Any]) {
+        guard let id = CoolapkJSON.string(entity["id"]) ?? CoolapkJSON.string(entity["tag"]),
+              let title = CoolapkJSON.string(entity["tag"]) ?? CoolapkJSON.string(entity["title"])
+        else { return nil }
+        self.id = id
+        self.title = CoolapkJSON.cleanHTML(title)
+        self.hotNum = CoolapkJSON.int(entity["count"])
+            ?? CoolapkJSON.int(entity["hot_num"])
+            ?? CoolapkJSON.int(entity["hotNum"])
     }
 }
 
@@ -52,7 +119,7 @@ struct UserProfile: Hashable {
 final class AppModel {
     // MARK: 信息流状态
 
-    var category: FeedCategory = .hot {
+    var category: FeedCategory = .home {
         didSet { if category != oldValue { Task { await loadFeeds(reset: true) } } }
     }
     private(set) var feeds: [FeedItem] = []
@@ -60,6 +127,44 @@ final class AppModel {
     private var page = 1
     private var hasMoreFeeds = true
     private var isLoadingFeeds = false
+
+    // MARK: 侧栏导航
+
+    /// 当前侧栏选中项。切到其他信息流分类时同步 category(由其 didSet 触发加载);
+    /// 切到收藏/关注/历史时同步 personalKind 并在列表为空时加载。
+    var entry: SidebarEntry = .feed(.home) {
+        didSet {
+            guard entry != oldValue else { return }
+            switch entry {
+            case .feed(let newCategory):
+                if newCategory != category { category = newCategory }
+            case .favorites:
+                personalKind = .favorites
+                if personalFeeds.isEmpty { Task { await loadPersonalList(reset: true) } }
+            case .following:
+                personalKind = .following
+                if personalFeeds.isEmpty { Task { await loadPersonalList(reset: true) } }
+            case .history:
+                personalKind = .history
+                if personalFeeds.isEmpty { Task { await loadPersonalList(reset: true) } }
+            case .notifications, .messages, .downloads:
+                break
+            }
+        }
+    }
+
+    var showLoginSheet = false
+    var isLoggedIn: Bool { userProfile != nil }
+
+    /// 当前用户 uid:优先已拉取的资料,否则从 cookie 里解析。
+    var currentUID: String? {
+        if let uid = userProfile?.uid, !uid.isEmpty { return uid }
+        guard let cookie = api.getUserCookie(),
+              let uid = Self.cookieValue(cookie, name: "uid"),
+              uid != "0"
+        else { return nil }
+        return uid
+    }
 
     // MARK: 搜索
 
@@ -81,9 +186,29 @@ final class AppModel {
     private var repliesPage = 1
     private var hasMoreReplies = true
 
+    // MARK: 详情栏热榜挂件
+
+    private(set) var hotPanelFeeds: [FeedItem] = []
+    private(set) var hotPanelTopics: [HotTopicItem] = []
+    private var hasLoadedHotPanel = false
+
     private let api = CoolapkApi.shared
 
     init() {}
+
+    /// 详情栏默认挂件:本月热榜 + 热门话题(整个会话只拉一次)。
+    func loadHotPanel() async {
+        guard !hasLoadedHotPanel else { return }
+        hasLoadedHotPanel = true
+        if let json = try? await api.getRankFeeds(rankType: "month", page: 1) {
+            hotPanelFeeds = Array(CoolapkJSON.entities(fromJSONString: json)
+                .compactMap(FeedItem.init(entity:)).prefix(8))
+        }
+        if let json = try? await api.getHotTopics() {
+            hotPanelTopics = Array(CoolapkJSON.entities(fromJSONString: json)
+                .compactMap(HotTopicItem.init(entity:)).prefix(10))
+        }
+    }
 
     // MARK: 登录会话
 
@@ -94,6 +219,7 @@ final class AppModel {
     func restoreSession() async {
         guard userProfile == nil, api.getUserCookie() != nil else { return }
         await refreshProfile()
+        await refreshNotificationBadge()
     }
 
     /// 登录窗口带回完整 cookie 后:设置会话 → 拉资料 → 写入账户库。
@@ -186,8 +312,12 @@ final class AppModel {
         do {
             let json: String
             switch category {
-            case .recommend:
+            case .home:
                 json = try await api.getIndexV8Feeds(page: UInt32(page))
+            case .headline:
+                json = try await api.getHeadlineFeeds(page: UInt32(page))
+            case .digest:
+                json = try await api.getDigestFeeds(page: UInt32(page))
             case .hot:
                 json = try await api.getHotFeeds(page: UInt32(page))
             case .latest:
@@ -299,6 +429,331 @@ final class AppModel {
             if case .Failed(let message) = error { statusText = "评论加载失败:\(Self.friendlyError(message))" }
         } catch {
             statusText = "评论加载失败:\(error.localizedDescription)"
+        }
+    }
+
+    // MARK: 通知
+
+    var notificationType: NotificationType = .atMe {
+        didSet {
+            if notificationType != oldValue { Task { await loadNotifications(reset: true) } }
+        }
+    }
+    private(set) var notifications: [NotificationItem] = []
+    private(set) var notificationsStatus = ""
+    private(set) var notificationBadge = 0
+    private var notificationsPage = 1
+    private var hasMoreNotifications = true
+    private var isLoadingNotifications = false
+
+    func loadNotifications(reset: Bool) async {
+        guard !isLoadingNotifications else { return }
+        isLoadingNotifications = true
+        defer { isLoadingNotifications = false }
+
+        if reset {
+            notificationsPage = 1
+            hasMoreNotifications = true
+        }
+        notificationsStatus = ""
+
+        do {
+            let json = try await api.getNotifications(
+                notificationType: notificationType.rawValue,
+                page: UInt32(notificationsPage)
+            )
+            let parsed = NotificationItem.parseList(fromJSONString: json)
+            if reset {
+                notifications = parsed
+            } else {
+                let known = Set(notifications.map(\.id))
+                notifications += parsed.filter { !known.contains($0.id) }
+            }
+            hasMoreNotifications = !parsed.isEmpty
+            if reset { notificationsPage = 2 } else { notificationsPage += 1 }
+            if notifications.isEmpty { notificationsStatus = "暂无通知" }
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { notificationsStatus = "加载失败:\(Self.friendlyError(message))" }
+        } catch {
+            notificationsStatus = "加载失败:\(error.localizedDescription)"
+        }
+    }
+
+    func loadMoreNotificationsIfNeeded(current item: NotificationItem) async {
+        guard item.id == notifications.last?.id, hasMoreNotifications, !isLoadingNotifications else { return }
+        await loadNotifications(reset: false)
+    }
+
+    /// 角标:checkCount 的 data 可能是数字也可能是含 total 的对象,失败静默归零。
+    func refreshNotificationBadge() async {
+        guard isLoggedIn else {
+            notificationBadge = 0
+            return
+        }
+        do {
+            notificationBadge = Self.parseBadge(fromJSONString: try await api.getNotificationCount())
+        } catch {
+            notificationBadge = 0
+        }
+    }
+
+    private static func parseBadge(fromJSONString json: String) -> Int {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return 0 }
+        if let number = root["data"] as? NSNumber { return number.intValue }
+        guard let payload = root["data"] as? [String: Any] else { return 0 }
+        if let total = payload["total"] as? NSNumber { return total.intValue }
+        // 任意数字字段兜底(跳过 code/status 之类的状态码)
+        for (key, value) in payload where key != "code" && key != "status" {
+            if let number = value as? NSNumber { return number.intValue }
+        }
+        return 0
+    }
+
+    // MARK: 私信
+
+    private(set) var chatUsers: [ChatUser] = []
+    private(set) var chatListStatus = ""
+    var selectedChat: ChatUser? {
+        didSet {
+            guard selectedChat != nil, selectedChat != oldValue else { return }
+            chatMessages = []
+            hasMoreChatHistory = true
+            Task { await loadChatHistory(reset: true) }
+        }
+    }
+    private(set) var chatMessages: [ChatMessage] = []
+    private(set) var isLoadingChat = false
+    var chatDraft = ""
+    private(set) var chatSendStatus: String?
+    private var chatsPage = 1
+    private var hasMoreChats = true
+    private var isLoadingChats = false
+    private var chatHistoryPage = 1
+    private var hasMoreChatHistory = true
+
+    func loadChats(reset: Bool) async {
+        guard !isLoadingChats else { return }
+        isLoadingChats = true
+        defer { isLoadingChats = false }
+
+        if reset {
+            chatsPage = 1
+            hasMoreChats = true
+        }
+        chatListStatus = ""
+
+        do {
+            let json = try await api.getRecentChatUsers(page: UInt32(chatsPage))
+            let parsed = ChatUser.parseList(fromJSONString: json)
+            if reset {
+                chatUsers = parsed
+            } else {
+                let known = Set(chatUsers.map(\.id))
+                chatUsers += parsed.filter { !known.contains($0.id) }
+            }
+            hasMoreChats = !parsed.isEmpty
+            if reset { chatsPage = 2 } else { chatsPage += 1 }
+            if chatUsers.isEmpty { chatListStatus = "暂无私信" }
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { chatListStatus = "加载失败:\(Self.friendlyError(message))" }
+        } catch {
+            chatListStatus = "加载失败:\(error.localizedDescription)"
+        }
+    }
+
+    func loadChatHistory(reset: Bool) async {
+        guard let chat = selectedChat, !isLoadingChat else { return }
+        isLoadingChat = true
+        defer { isLoadingChat = false }
+
+        if reset {
+            chatHistoryPage = 1
+            hasMoreChatHistory = true
+        }
+
+        do {
+            // ukey 为空时直接用 uid 试
+            let ukey = chat.ukey.isEmpty ? chat.uid : chat.ukey
+            let json = try await api.listChatHistory(ukey: ukey, page: UInt32(chatHistoryPage))
+            let parsed = ChatMessage.parseList(fromJSONString: json)
+            if reset {
+                chatMessages = parsed
+            } else {
+                let known = Set(chatMessages.map(\.id))
+                chatMessages += parsed.filter { !known.contains($0.id) }
+            }
+            hasMoreChatHistory = !parsed.isEmpty
+            if reset { chatHistoryPage = 2 } else { chatHistoryPage += 1 }
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { chatListStatus = "聊天记录加载失败:\(Self.friendlyError(message))" }
+        } catch {
+            chatListStatus = "聊天记录加载失败:\(error.localizedDescription)"
+        }
+    }
+
+    func sendChatMessage() async {
+        guard isLoggedIn, let chat = selectedChat else { return }
+        let message = chatDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        chatSendStatus = nil
+        do {
+            _ = try await api.sendPrivateMessage(uid: chat.uid, message: message)
+            chatDraft = ""
+            await loadChatHistory(reset: true)
+        } catch let error as CoolapkError {
+            if case .Failed(let failure) = error { chatSendStatus = Self.friendlyError(failure) }
+        } catch {
+            chatSendStatus = error.localizedDescription
+        }
+    }
+
+    // MARK: 互动(点赞/收藏/回复)
+
+    var replyDraft = ""
+    private(set) var likedFeedIDs: Set<String> = []
+    private(set) var favoritedFeedIDs: Set<String> = []
+    private(set) var interactionStatus: String?
+
+    /// 点赞/取消点赞:先乐观更新集合,失败回滚并给出错误提示。
+    func toggleLike() async {
+        guard isLoggedIn, let feedID = selectedFeedID else { return }
+        let wasLiked = likedFeedIDs.contains(feedID)
+        if wasLiked {
+            likedFeedIDs.remove(feedID)
+        } else {
+            likedFeedIDs.insert(feedID)
+        }
+        do {
+            if wasLiked {
+                _ = try await api.unlikeFeed(feedId: feedID)
+            } else {
+                _ = try await api.likeFeed(feedId: feedID)
+            }
+            interactionStatus = nil
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { interactionStatus = Self.friendlyError(message) }
+            if wasLiked { likedFeedIDs.insert(feedID) } else { likedFeedIDs.remove(feedID) }
+        } catch {
+            interactionStatus = error.localizedDescription
+            if wasLiked { likedFeedIDs.insert(feedID) } else { likedFeedIDs.remove(feedID) }
+        }
+    }
+
+    /// 收藏。facade 暂无取消收藏接口:已收藏时不再调用,直接视为成功态。
+    func toggleFavorite() async {
+        guard isLoggedIn, let feedID = selectedFeedID else { return }
+        guard !favoritedFeedIDs.contains(feedID) else { return }
+        favoritedFeedIDs.insert(feedID)
+        do {
+            _ = try await api.favoriteFeed(feedId: feedID)
+            interactionStatus = nil
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { interactionStatus = Self.friendlyError(message) }
+            favoritedFeedIDs.remove(feedID)
+        } catch {
+            interactionStatus = error.localizedDescription
+            favoritedFeedIDs.remove(feedID)
+        }
+    }
+
+    /// 发表评论(rid 固定 nil,评论楼中楼暂未接)。
+    func sendReply() async {
+        guard isLoggedIn, let feedID = selectedFeedID else { return }
+        let message = replyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        do {
+            _ = try await api.replyFeed(feedId: feedID, message: message, rid: nil)
+            replyDraft = ""
+            interactionStatus = nil
+            await loadReplies(reset: true)
+        } catch let error as CoolapkError {
+            if case .Failed(let failure) = error { interactionStatus = Self.friendlyError(failure) }
+        } catch {
+            interactionStatus = error.localizedDescription
+        }
+    }
+
+    // MARK: 个人列表(收藏/关注/历史)
+
+    private(set) var personalKind: PersonalListKind?
+    private(set) var personalFeeds: [FeedItem] = []
+    private(set) var personalStatus = ""
+    private var personalPage = 1
+    private var hasMorePersonalFeeds = true
+    private var isLoadingPersonal = false
+
+    func loadPersonalList(reset: Bool) async {
+        guard !isLoadingPersonal, let kind = personalKind else { return }
+        isLoadingPersonal = true
+        defer { isLoadingPersonal = false }
+
+        if reset {
+            personalPage = 1
+            hasMorePersonalFeeds = true
+        }
+        personalStatus = ""
+
+        do {
+            let json: String
+            switch kind {
+            case .favorites:
+                guard let uid = currentUID, !uid.isEmpty else {
+                    personalStatus = "请先登录"
+                    return
+                }
+                json = try await api.getFavoriteList(uid: uid, page: UInt32(personalPage))
+            case .following:
+                json = try await api.getFollowingFeeds(page: UInt32(personalPage))
+            case .history:
+                json = try await api.getRecentHistory(page: UInt32(personalPage))
+            }
+
+            let parsed = CoolapkJSON.entities(fromJSONString: json)
+                .compactMap(FeedItem.init(entity:))
+            if reset {
+                personalFeeds = parsed
+            } else {
+                let known = Set(personalFeeds.map(\.id))
+                personalFeeds += parsed.filter { !known.contains($0.id) }
+            }
+            hasMorePersonalFeeds = !parsed.isEmpty
+            if reset { personalPage = 2 } else { personalPage += 1 }
+            if personalFeeds.isEmpty { personalStatus = "暂无内容" }
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { personalStatus = "加载失败:\(Self.friendlyError(message))" }
+        } catch {
+            personalStatus = "加载失败:\(error.localizedDescription)"
+        }
+    }
+
+    func loadMorePersonalIfNeeded(current feed: FeedItem) async {
+        guard feed.id == personalFeeds.last?.id, hasMorePersonalFeeds, !isLoadingPersonal else { return }
+        await loadPersonalList(reset: false)
+    }
+
+    // MARK: APK 下载
+
+    let downloads = DownloadManager.shared
+    var newPackageName = ""
+
+    /// 包名 → 版本列表 → 取第一个可用版本入下载队列。
+    func resolveAndDownload() async {
+        let packageName = newPackageName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !packageName.isEmpty else { return }
+        do {
+            let json = try await api.getDownloadVersionList(packageName: packageName)
+            let versions = DownloadVersion.parseList(fromJSONString: json, packageName: packageName)
+            guard let version = versions.first else {
+                downloads.statusText = "没有找到「\(packageName)」的可用版本"
+                return
+            }
+            downloads.start(url: version.url, packageName: version.packageName, versionName: version.versionName)
+        } catch let error as CoolapkError {
+            if case .Failed(let message) = error { downloads.statusText = "查询失败:\(Self.friendlyError(message))" }
+        } catch {
+            downloads.statusText = "查询失败:\(error.localizedDescription)"
         }
     }
 

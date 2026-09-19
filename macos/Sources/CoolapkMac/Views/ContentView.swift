@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// 酷安品牌绿:全 App 统一使用。
+extension Color {
+    static let coolapkGreen = Color(red: 0, green: 0.71, blue: 0.27)
+}
+
+// MARK: - 根视图:三栏骨架
+
 struct ContentView: View {
     @State private var model = AppModel()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -7,14 +14,45 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
+                .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 280)
         } content: {
-            FeedListView(model: model)
+            contentColumn
                 .navigationSplitViewColumnWidth(min: 380, ideal: 460, max: 560)
         } detail: {
-            FeedDetailView(model: model)
+            detailColumn
         }
         .environment(model)
+    }
+
+    /// 中列:按侧栏入口路由(社交/我的页由 SocialViews.swift 提供)。
+    @ViewBuilder
+    private var contentColumn: some View {
+        switch model.entry {
+        case .feed:
+            FeedListView(model: model)
+        case .notifications:
+            NotificationsView(model: model)
+        case .messages:
+            MessagesView(model: model)
+        case .favorites:
+            PersonalListView(model: model)
+        case .following:
+            PersonalListView(model: model)
+        case .history:
+            PersonalListView(model: model)
+        case .downloads:
+            DownloadsView(model: model)
+        }
+    }
+
+    /// 右列:feed 入口且有选中 → 详情;否则默认热榜挂件面板。
+    @ViewBuilder
+    private var detailColumn: some View {
+        if case .feed = model.entry, model.selectedFeedID != nil {
+            FeedDetailView(model: model)
+        } else {
+            HotPanel(model: model)
+        }
     }
 }
 
@@ -23,20 +61,86 @@ struct ContentView: View {
 struct SidebarView: View {
     let model: AppModel
 
+    /// 社区分区展示顺序:内容流在前,榜单在后(与网页版一致)。
+    private static let feedCategories: [FeedCategory] = [
+        .home, .headline, .hot, .digest, .picture, .latest, .month, .favorite, .reply
+    ]
+
     var body: some View {
         List(selection: Binding(
-            get: { model.category },
-            set: { model.category = $0 ?? model.category }
+            get: { model.entry },
+            set: { model.entry = $0 ?? model.entry }
         )) {
-            Section("信息流") {
-                ForEach(FeedCategory.allCases) { category in
+            Section("社区") {
+                ForEach(Self.feedCategories) { category in
                     Label(category.rawValue, systemImage: category.systemImage)
-                        .tag(category)
+                        .tag(SidebarEntry.feed(category))
                 }
+            }
+
+            Section("社交") {
+                if model.notificationBadge > 0 {
+                    Label("通知", systemImage: "bell")
+                        .badge(model.notificationBadge)
+                        .tag(SidebarEntry.notifications)
+                } else {
+                    Label("通知", systemImage: "bell")
+                        .tag(SidebarEntry.notifications)
+                }
+                Label("消息", systemImage: "envelope")
+                    .tag(SidebarEntry.messages)
+            }
+
+            Section("我的") {
+                Label("收藏", systemImage: "star")
+                    .tag(SidebarEntry.favorites)
+                Label("我关注的", systemImage: "person.2")
+                    .tag(SidebarEntry.following)
+                Label("历史", systemImage: "clock.arrow.circlepath")
+                    .tag(SidebarEntry.history)
+                Label("下载", systemImage: "arrow.down.circle")
+                    .tag(SidebarEntry.downloads)
             }
         }
         .listStyle(.sidebar)
         .navigationTitle("CoolapkMac")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            accountFooter
+        }
+    }
+
+    /// 列表底部登录态一行:已登录显示用户名;游客整行可点,拉起登录窗。
+    @ViewBuilder
+    private var accountFooter: some View {
+        if let profile = model.userProfile {
+            Label {
+                Text("已登录:\(profile.username)")
+                    .lineLimit(1)
+            } icon: {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color.coolapkGreen)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+        } else {
+            Button {
+                model.showLoginSheet = true
+            } label: {
+                Label("游客模式 · 点击登录", systemImage: "person.crop.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
     }
 }
 
@@ -44,7 +148,11 @@ struct SidebarView: View {
 
 struct FeedListView: View {
     @Bindable var model: AppModel
-    @State private var showLogin = false
+    @State private var showPublishNotice = false
+
+    private var currentTitle: String {
+        model.isSearchActive ? "搜索结果" : model.category.rawValue
+    }
 
     var body: some View {
         List(selection: Binding(
@@ -80,9 +188,12 @@ struct FeedListView: View {
                     .background(.bar)
             }
         }
-        .navigationTitle(model.isSearchActive ? "搜索结果" : model.category.rawValue)
-
+        .navigationTitle(currentTitle)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(currentTitle)
+                    .font(.headline)
+            }
             if model.isSearchActive {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -91,6 +202,20 @@ struct FeedListView: View {
                         Label("取消搜索", systemImage: "xmark.circle")
                     }
                 }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                publishButton
+            }
+            ToolbarItem(placement: .primaryAction) {
+                notificationButton
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    model.entry = .messages
+                } label: {
+                    Label("消息", systemImage: "envelope")
+                }
+                .help("消息")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -102,25 +227,7 @@ struct FeedListView: View {
                 .disabled(model.isSearchActive)
             }
             ToolbarItem(placement: .primaryAction) {
-                if let profile = model.userProfile {
-                    Menu {
-                        Button("登出", role: .destructive) {
-                            Task { await model.logout() }
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            AvatarView(url: profile.avatarURL, size: 22)
-                            Text(profile.username)
-                                .lineLimit(1)
-                        }
-                    }
-                } else {
-                    Button {
-                        showLogin = true
-                    } label: {
-                        Label("登录", systemImage: "person.crop.circle")
-                    }
-                }
+                accountMenu
             }
         }
         .refreshable { await model.refresh() }
@@ -133,17 +240,85 @@ struct FeedListView: View {
             Task { await model.runSearch() }
         }
         .autocorrectionDisabled()
+        .alert("发布动态", isPresented: $showPublishNotice) {
+            Button("好", role: .cancel) {}
+        } message: {
+            Text("发布动态功能开发中")
+        }
         .task {
             await model.restoreSession()
+            if model.isLoggedIn {
+                await model.refreshNotificationBadge()
+            }
             if model.feeds.isEmpty { await model.loadFeeds(reset: true) }
             // 调试:COOLAPKMAC_AUTO_LOGIN=1 启动时自动弹出登录窗口
             if ProcessInfo.processInfo.environment["COOLAPKMAC_AUTO_LOGIN"] == "1" {
-                showLogin = true
+                model.showLoginSheet = true
             }
         }
-        .sheet(isPresented: $showLogin) {
+        .sheet(isPresented: $model.showLoginSheet) {
             LoginView { cookie in
                 Task { await model.completeLogin(cookie: cookie) }
+            }
+        }
+    }
+
+    /// 绿色"发布动态":未登录引导登录,已登录提示功能开发中。
+    private var publishButton: some View {
+        Button {
+            if model.isLoggedIn {
+                showPublishNotice = true
+            } else {
+                model.showLoginSheet = true
+            }
+        } label: {
+            Label("发布动态", systemImage: "pencil.and.list.clipboard")
+        }
+        .foregroundStyle(Color.coolapkGreen)
+        .help("发布动态")
+    }
+
+    /// 通知铃铛:未读 > 0 时叠红色角标数字。
+    private var notificationButton: some View {
+        Button {
+            model.entry = .notifications
+        } label: {
+            Label("通知", systemImage: "bell")
+        }
+        .overlay(alignment: .trailing) {
+            if model.notificationBadge > 0 {
+                Text("\(model.notificationBadge)")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Color.red, in: Capsule())
+                    .offset(x: 9, y: -9)
+                    .help("未读通知 \(model.notificationBadge) 条")
+            }
+        }
+        .help("通知")
+    }
+
+    @ViewBuilder
+    private var accountMenu: some View {
+        if let profile = model.userProfile {
+            Menu {
+                Button("登出", role: .destructive) {
+                    Task { await model.logout() }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    AvatarView(url: profile.avatarURL, size: 22)
+                    Text(profile.username)
+                        .lineLimit(1)
+                }
+            }
+        } else {
+            Button {
+                model.showLoginSheet = true
+            } label: {
+                Label("登录", systemImage: "person.crop.circle")
             }
         }
     }
@@ -151,7 +326,7 @@ struct FeedListView: View {
     @ViewBuilder
     private var feedContent: some View {
         ForEach(model.feeds) { feed in
-            FeedRowView(feed: feed)
+            FeedCardView(feed: feed)
                 .tag(feed.id)
                 .onAppear {
                     Task { await model.loadMoreIfNeeded(current: feed) }
@@ -165,7 +340,7 @@ struct FeedListView: View {
             ForEach(sections) { section in
                 Section(section.title) {
                     ForEach(section.items) { feed in
-                        FeedRowView(feed: feed)
+                        FeedCardView(feed: feed)
                             .tag(feed.id)
                     }
                 }
@@ -182,61 +357,10 @@ struct FeedListView: View {
     }
 }
 
-// MARK: - 列表行
-
-struct FeedRowView: View {
-    let feed: FeedItem
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            AvatarView(url: feed.avatarURL, size: 36)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
-                    if !feed.username.isEmpty {
-                        Text(feed.username)
-                            .font(.callout.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
-                    Text(feed.dateline, format: .coolapkRelative)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-
-                if !feed.displayText.isEmpty {
-                    Text(feed.displayText)
-                        .font(.subheadline)
-                        .lineLimit(3)
-                }
-
-                if !feed.picURLs.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(feed.picURLs.prefix(3), id: \.absoluteString) { url in
-                            RemoteImage(url: url)
-                                .frame(width: 64, height: 64)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-                }
-
-                HStack(spacing: 14) {
-                    StatLabel(systemImage: "hand.thumbsup", count: feed.likeCount)
-                    StatLabel(systemImage: "bubble.right", count: feed.replyCount)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 2)
-    }
-}
-
 // MARK: - 详情
 
 struct FeedDetailView: View {
-    let model: AppModel
+    @Bindable var model: AppModel
 
     var body: some View {
         Group {
@@ -269,23 +393,18 @@ struct FeedDetailView: View {
                             PicGrid(urls: detail.picURLs)
                         }
 
-                        HStack(spacing: 20) {
-                            StatLabel(systemImage: "hand.thumbsup", count: detail.likeCount)
-                            StatLabel(systemImage: "bubble.right", count: detail.replyCount)
-                            StatLabel(systemImage: "star", count: detail.favCount)
-                            StatLabel(systemImage: "arrowshape.turn.up.right", count: detail.shareCount)
-                        }
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 6)
+                        DetailInteractionBar(model: model, detail: detail)
 
                         Divider()
 
-                        ReplyListView(model: model)
+                        commentSection
                     }
                     .padding(20)
                     .frame(maxWidth: 720, alignment: .leading)
                     .frame(maxWidth: .infinity)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composerBar
                 }
             } else if model.isLoadingDetail {
                 ProgressView("加载详情…")
@@ -302,11 +421,14 @@ struct FeedDetailView: View {
                                 .padding(12)
                                 .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
                         }
-                        ReplyListView(model: model)
+                        commentSection
                     }
                     .padding(20)
                     .frame(maxWidth: 720, alignment: .leading)
                     .frame(maxWidth: .infinity)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    composerBar
                 }
             } else {
                 ContentUnavailableView(
@@ -317,6 +439,92 @@ struct FeedDetailView: View {
             }
         }
         .navigationTitle("详情")
+    }
+
+    /// 评论区:互动状态提示(非空时) + 评论列表。
+    @ViewBuilder
+    private var commentSection: some View {
+        if let status = model.interactionStatus, !status.isEmpty {
+            Text(status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        ReplyListView(model: model)
+    }
+
+    /// 底部评论输入条:登录后可发送;游客显示登录引导。
+    private var composerBar: some View {
+        HStack(spacing: 10) {
+            if model.isLoggedIn {
+                TextField("发表评论…", text: $model.replyDraft)
+                    .textFieldStyle(.roundedBorder)
+                Button("发送") {
+                    Task { await model.sendReply() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.coolapkGreen)
+                .disabled(model.replyDraft.isEmpty)
+            } else {
+                Button {
+                    model.showLoginSheet = true
+                } label: {
+                    Label("登录后可点赞与评论", systemImage: "person.crop.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+}
+
+/// 详情互动条:计数 + 点赞/收藏按钮(未登录禁用)。
+private struct DetailInteractionBar: View {
+    @Bindable var model: AppModel
+    let detail: FeedDetail
+
+    private var isLiked: Bool { model.likedFeedIDs.contains(detail.id) }
+    private var isFavorited: Bool { model.favoritedFeedIDs.contains(detail.id) }
+
+    var body: some View {
+        HStack(spacing: 20) {
+            StatLabel(systemImage: "hand.thumbsup", count: detail.likeCount)
+            StatLabel(systemImage: "bubble.right", count: detail.replyCount)
+            StatLabel(systemImage: "star", count: detail.favCount)
+            StatLabel(systemImage: "arrowshape.turn.up.right", count: detail.shareCount)
+
+            Spacer()
+
+            Button {
+                Task { await model.toggleLike() }
+            } label: {
+                Label(
+                    isLiked ? "已赞" : "点赞",
+                    systemImage: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup"
+                )
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(isLiked ? Color.coolapkGreen : Color.secondary)
+            .disabled(!model.isLoggedIn)
+            .help(model.isLoggedIn ? "点赞" : "登录后可点赞")
+
+            Button {
+                Task { await model.toggleFavorite() }
+            } label: {
+                Label(
+                    isFavorited ? "已收藏" : "收藏",
+                    systemImage: isFavorited ? "bookmark.fill" : "bookmark"
+                )
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(isFavorited ? Color.coolapkGreen : Color.secondary)
+            .disabled(!model.isLoggedIn)
+            .help(model.isLoggedIn ? "收藏" : "登录后可收藏")
+        }
+        .font(.callout)
+        .padding(.vertical, 6)
     }
 }
 
@@ -472,6 +680,56 @@ struct StatLabel: View {
 
     var body: some View {
         Label(count == 0 ? "" : "\(count)", systemImage: systemImage)
+    }
+}
+
+/// 旧版列表行:保留给潜在外部引用(搜索结果等已改用 FeedCardView)。
+struct FeedRowView: View {
+    let feed: FeedItem
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            AvatarView(url: feed.avatarURL, size: 36)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline) {
+                    if !feed.username.isEmpty {
+                        Text(feed.username)
+                            .font(.callout.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Text(feed.dateline, format: .coolapkRelative)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+
+                if !feed.displayText.isEmpty {
+                    Text(feed.displayText)
+                        .font(.subheadline)
+                        .lineLimit(3)
+                }
+
+                if !feed.picURLs.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(feed.picURLs.prefix(3), id: \.absoluteString) { url in
+                            RemoteImage(url: url)
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                    }
+                }
+
+                HStack(spacing: 14) {
+                    StatLabel(systemImage: "hand.thumbsup", count: feed.likeCount)
+                    StatLabel(systemImage: "bubble.right", count: feed.replyCount)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 

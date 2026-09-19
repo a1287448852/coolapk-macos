@@ -95,6 +95,11 @@ struct FeedItem: Identifiable, Hashable {
     let picURLs: [URL]
     let likeCount: Int
     let replyCount: Int
+    let favCount: Int
+    let shareCount: Int
+    let userLevel: String
+    let deviceTitle: String
+    let location: String
     let dateline: Date
 
     init?(entity: [String: Any]) {
@@ -112,6 +117,12 @@ struct FeedItem: Identifiable, Hashable {
         self.picURLs = CoolapkJSON.pics(entity)
         self.likeCount = CoolapkJSON.int(entity["likenum"])
         self.replyCount = CoolapkJSON.int(entity["replynum"])
+        self.favCount = CoolapkJSON.int(entity["favnum"])
+        self.shareCount = CoolapkJSON.int(entity["sharenum"])
+        // userLevel 服务端可能是数字也可能是字符串,CoolapkJSON.string 两者都能吃
+        self.userLevel = CoolapkJSON.string(entity["userLevel"]) ?? ""
+        self.deviceTitle = CoolapkJSON.string(entity["deviceTitle"]) ?? ""
+        self.location = CoolapkJSON.string(entity["location"]) ?? ""
         self.dateline = Date(timeIntervalSince1970: TimeInterval(CoolapkJSON.int(entity["dateline"])))
         // 运营卡片等非内容实体:没有文本也没有图,跳过
         if title.isEmpty && excerpt.isEmpty && picURLs.isEmpty { return nil }

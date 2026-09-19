@@ -153,6 +153,43 @@ impl CoolapkApi {
         to_json_string(self.client.get_hot_topics().await.map_err(CoolapkError::from_string)?)
     }
 
+    // MARK: 扩展信息流(头条/快讯/收藏/关注/历史)
+
+    pub async fn get_headline_feeds(&self, page: u32) -> UniResult<String> {
+        to_json_string(self.client.get_headline_feeds(page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    pub async fn get_digest_feeds(&self, page: u32) -> UniResult<String> {
+        to_json_string(self.client.get_digest_feeds(page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    /// 用户收藏列表。client 实际签名是 (fav_type, page, first_item, last_item):
+    /// type 支持 feed/apk/album,这里固定 "feed";服务端按 cookie 识别用户,
+    /// uid 参数仅为保持 Swift 侧调用形态一致,不参与请求。
+    pub async fn get_favorite_list(&self, uid: String, page: u32) -> UniResult<String> {
+        let _ = uid;
+        to_json_string(
+            self.client
+                .get_favorite_list("feed", page, "", "")
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
+    pub async fn get_following_feeds(&self, page: u32) -> UniResult<String> {
+        to_json_string(self.client.get_following_feeds(page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    /// 浏览历史。client 还支持 first_item/last_item 游标分页,facade 暂不透传(传 None)。
+    pub async fn get_recent_history(&self, page: u32) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .get_recent_history(page, None, None)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
     // MARK: 应用与用户
 
     pub async fn get_app_detail(&self, package_name: String) -> UniResult<String> {
@@ -167,5 +204,102 @@ impl CoolapkApi {
 
     pub async fn search_all(&self, query: String, page: u32) -> UniResult<String> {
         to_json_string(self.client.search_all(&query, page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    // MARK: 通知
+
+    /// 通知列表。notification_type: list(评论回复)/atMeList(@我)/
+    /// atCommentMeList(评论@我)/feedLikeList(点赞)/contactsFollowList(新关注)。
+    pub async fn get_notifications(&self, notification_type: String, page: u32) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .get_notifications(&notification_type, page)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
+    pub async fn get_notification_count(&self) -> UniResult<String> {
+        to_json_string(self.client.get_notification_count().await.map_err(CoolapkError::from_string)?)
+    }
+
+    // MARK: 私信
+
+    pub async fn list_messages(&self, page: u32) -> UniResult<String> {
+        to_json_string(self.client.list_messages(page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    pub async fn get_recent_chat_users(&self, page: u32) -> UniResult<String> {
+        to_json_string(self.client.get_recent_chat_users(page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    pub async fn list_chat_history(&self, ukey: String, page: u32) -> UniResult<String> {
+        to_json_string(self.client.list_chat_history(&ukey, page).await.map_err(CoolapkError::from_string)?)
+    }
+
+    /// 发送私信(需登录;服务端有风控,失败时 message 透传给 UI)。
+    pub async fn send_private_message(&self, uid: String, message: String) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .send_private_message(&uid, &message)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
+    // MARK: 互动(需登录;写接口受服务端风控约束)
+
+    pub async fn like_feed(&self, feed_id: String) -> UniResult<String> {
+        to_json_string(self.client.like_feed(&feed_id).await.map_err(CoolapkError::from_string)?)
+    }
+
+    pub async fn unlike_feed(&self, feed_id: String) -> UniResult<String> {
+        to_json_string(self.client.unlike_feed(&feed_id).await.map_err(CoolapkError::from_string)?)
+    }
+
+    pub async fn favorite_feed(&self, feed_id: String) -> UniResult<String> {
+        to_json_string(self.client.favorite_feed(&feed_id).await.map_err(CoolapkError::from_string)?)
+    }
+
+    /// 发表评论。rid 非空表示回复某条评论。
+    pub async fn reply_feed(&self, feed_id: String, message: String, rid: Option<String>) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .reply_feed(&feed_id, &message, rid.as_deref(), None, None)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
+    // MARK: APK 下载
+
+    pub async fn get_download_version_list(&self, package_name: String) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .get_download_version_list(&package_name)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
+    /// 导出带签名与设备指纹的请求头(JSON 对象),供 Swift URLSession 下载 APK 使用。
+    pub fn download_headers(&self) -> UniResult<String> {
+        let request = self
+            .client
+            .apply_download_headers(reqwest::Client::new().get("https://api.coolapk.com/"))
+            .map_err(CoolapkError::from_string)?
+            .build()
+            .map_err(|e| CoolapkError::Failed { message: format!("build request failed: {e}") })?;
+        let map: serde_json::Map<String, serde_json::Value> = request
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.as_str().to_string(),
+                    serde_json::Value::String(value.to_str().unwrap_or_default().to_string()),
+                )
+            })
+            .collect();
+        to_json_string(serde_json::Value::Object(map))
     }
 }
