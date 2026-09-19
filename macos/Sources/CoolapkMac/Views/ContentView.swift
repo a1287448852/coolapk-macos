@@ -115,23 +115,30 @@ struct SidebarView: View {
         }
     }
 
-    /// 列表底部登录态一行:已登录显示用户名;游客整行可点,拉起登录窗。
+    /// 列表底部登录态一行:已登录显示用户名(点击展开登出);游客整行可点,拉起登录窗。
     @ViewBuilder
     private var accountFooter: some View {
         if let profile = model.userProfile {
-            Label {
-                Text("已登录:\(profile.username)")
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Color.coolapkGreen)
+            Menu {
+                Button("登出", role: .destructive) {
+                    Task { await model.logout() }
+                }
+            } label: {
+                Label {
+                    Text("已登录:\(profile.username)")
+                        .lineLimit(1)
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.coolapkGreen)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.bar)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
         } else {
             Button {
                 model.showLoginSheet = true
@@ -256,9 +263,8 @@ struct FeedListView: View {
                 .keyboardShortcut("r")
                 .disabled(model.isSearchActive)
             }
-            ToolbarItem(placement: .primaryAction) {
-                accountMenu
-            }
+            // 账号菜单已移至侧栏底部登录态行(工具栏 Menu 的玻璃背景
+            // 在 macOS 26 上尺寸失控,会渲染成巨型液态玻璃圆)
         }
         .refreshable { await model.refresh() }
         .alert("发布动态", isPresented: $showPublishNotice) {
@@ -317,29 +323,6 @@ struct FeedListView: View {
             }
         }
         .help("通知")
-    }
-
-    @ViewBuilder
-    private var accountMenu: some View {
-        if let profile = model.userProfile {
-            Menu {
-                Button("登出", role: .destructive) {
-                    Task { await model.logout() }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    AvatarView(url: profile.avatarURL, size: 22)
-                    Text(profile.username)
-                        .lineLimit(1)
-                }
-            }
-        } else {
-            Button {
-                model.showLoginSheet = true
-            } label: {
-                Label("登录", systemImage: "person.crop.circle")
-            }
-        }
     }
 
     @ViewBuilder
