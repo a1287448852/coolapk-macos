@@ -196,6 +196,32 @@ struct FeedListView: View {
         }
         .navigationTitle(currentTitle)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                // 对齐原版:居中搜索框,覆盖 应用/动态/用户/话题
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("搜索应用、动态、用户、话题", text: $model.searchQuery)
+                        .textFieldStyle(.plain)
+                        .onSubmit {
+                            Task { await model.runSearch() }
+                        }
+                    if !model.searchQuery.isEmpty {
+                        Button {
+                            model.searchQuery = ""
+                            model.clearSearch()
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.quaternary.opacity(0.55), in: Capsule())
+                .frame(maxWidth: 380)
+            }
             if model.isSearchActive {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -233,10 +259,6 @@ struct FeedListView: View {
             }
         }
         .refreshable { await model.refresh() }
-        .onSubmit(of: .search) {
-            Task { await model.runSearch() }
-        }
-        .autocorrectionDisabled()
         .alert("发布动态", isPresented: $showPublishNotice) {
             Button("好", role: .cancel) {}
         } message: {
@@ -334,9 +356,12 @@ struct FeedListView: View {
         if let sections = model.searchSections, !sections.isEmpty {
             ForEach(sections) { section in
                 Section(section.title) {
-                    ForEach(section.items) { feed in
-                        FeedCardView(feed: feed)
-                            .tag(feed.id)
+                    ForEach(section.items) { item in
+                        SearchResultRow(item: item, label: section.title) {
+                            if let feedID = item.feedID {
+                                Task { await model.select(feedID: feedID) }
+                            }
+                        }
                     }
                 }
             }
@@ -349,6 +374,65 @@ struct FeedListView: View {
             Text(model.searchStatusText.isEmpty ? "输入关键词后回车搜索" : model.searchStatusText)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// 搜索结果行:按实体类型分型渲染(话题/应用/用户/动态),对齐原版搜索行为。
+struct SearchResultRow: View {
+    let item: SearchResultItem
+    var label: String = "结果"
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button {
+            onOpen()
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                switch item.kind {
+                case .user, .apk, .topic:
+                    RemoteImage(url: item.avatarURL)
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: item.kind == .user ? 18 : 8))
+                default:
+                    Image(systemName: "text.bubble")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, height: 36)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    if !item.subtitle.isEmpty {
+                        Text(item.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if item.kind == .feed {
+                    HStack(spacing: 12) {
+                        StatLabel(systemImage: "hand.thumbsup", count: item.likeCount)
+                        StatLabel(systemImage: "bubble.right", count: item.replyCount)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(.quaternary.opacity(0.6), in: Capsule())
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(item.feedID == nil)
     }
 }
 

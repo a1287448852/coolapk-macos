@@ -7,17 +7,14 @@ struct HotPanel: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 16),
-                    GridItem(.flexible(), spacing: 16)
-                ],
-                spacing: 16
-            ) {
+            // 上下堆叠、固定宽度,像原版右栏一样从顶部排列
+            VStack(alignment: .leading, spacing: 16) {
                 rankCard
                 topicsCard
             }
             .padding(20)
+            .frame(maxWidth: 460)
+            .frame(maxWidth: .infinity)
         }
         .navigationTitle("发现")
         .task {

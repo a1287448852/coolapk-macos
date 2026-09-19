@@ -100,3 +100,50 @@ final class PersonalTests: XCTestCase {
         XCTAssertTrue(versions.isEmpty, "非 .apk 下载地址应被过滤,实际 \(versions.count) 条")
     }
 }
+
+/// 搜索结果分型解析(话题/应用/用户/动态,对齐原版搜索行为)。
+final class SearchResultParseTests: XCTestCase {
+    private let fixture = """
+    {"code":200,"data":[
+      {"description":"更多相关话题","entities":[
+        {"id":"10","entityType":"topic","title":"数码日常","commentnum":11701},
+        {"id":"11","entityType":"topic","title":"小米天气"}]},
+      {"description":"更多相关应用","entities":[
+        {"id":"20","entityType":"apk","title":"小米运动健康","apkname":"运动健康","score":"9.2"}]},
+      {"description":"更多相关用户","entities":[
+        {"id":"30","entityType":"user","username":"雷军","userAvatar":"http://image.coolapk.com/a.png","fansnum":100}]},
+      {"description":"更多相关动态","entities":[
+        {"id":"40","entityType":"feed","username":"某人","message":"小米太强了","likenum":88,"replynum":9,"dateline":1789700000}]}
+    ]}
+    """
+
+    func testParseGroupsAndKinds() {
+        let sections = SearchResultSection.parse(fromJSONString: fixture)
+        XCTAssertEqual(sections.count, 4)
+        XCTAssertEqual(sections[0].title, "话题")
+        XCTAssertEqual(sections[0].items[0].kind, .topic)
+        XCTAssertEqual(sections[0].items[0].title, "数码日常")
+        XCTAssertTrue(sections[0].items[0].subtitle.contains("11701"))
+
+        XCTAssertEqual(sections[1].items[0].kind, .apk)
+        XCTAssertEqual(sections[1].items[0].title, "小米运动健康")
+
+        XCTAssertEqual(sections[2].items[0].kind, .user)
+        XCTAssertEqual(sections[2].items[0].title, "雷军")
+        XCTAssertTrue(sections[2].items[0].subtitle.contains("100"))
+        XCTAssertNotNil(sections[2].items[0].avatarURL, "用户头像应升级为 https")
+        XCTAssertTrue(sections[2].items[0].avatarURL?.absoluteString.hasPrefix("https://") == true)
+
+        XCTAssertEqual(sections[3].items[0].kind, .feed)
+        XCTAssertEqual(sections[3].items[0].title, "小米太强了")
+        XCTAssertNotNil(sections[3].items[0].feedID, "feed 类型保留可点开的动态 ID")
+    }
+
+    func testEntityWithoutTitleAndKindFiltered() {
+        let json = """
+        {"code":200,"data":[{"description":"更多相关话题","entities":[
+          {"entityType":"topic","commentnum":5}]}]}
+        """
+        XCTAssertTrue(SearchResultSection.parse(fromJSONString: json).isEmpty)
+    }
+}

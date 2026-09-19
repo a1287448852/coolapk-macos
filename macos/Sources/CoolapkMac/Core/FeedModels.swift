@@ -149,7 +149,7 @@ struct FeedItem: Identifiable, Hashable {
 /// 搜索结果分组(接口按 话题/应用/用户/帖子 分组返回)。
 struct SearchResultSection: Identifiable, Hashable {
     let title: String
-    let items: [FeedItem]
+    let items: [SearchResultItem]
     var id: String { title }
 
     /// 从 search/all 的分组 JSON 解析;兼容 data 为平铺数组的形态。
@@ -170,12 +170,105 @@ struct SearchResultSection: Identifiable, Hashable {
 
         return groups.compactMap { group in
             guard let list = group["entities"] as? [Any] else { return nil }
-            let title = CoolapkJSON.string(group["title"])
+            let rawTitle = CoolapkJSON.string(group["title"])
                 ?? CoolapkJSON.string(group["description"])
                 ?? "结果"
-            let items = list.compactMap { $0 as? [String: Any] }.compactMap(FeedItem.init(entity:))
+            let title = rawTitle.hasPrefix("更多相关") ? String(rawTitle.dropPrefix("更多相关")) : rawTitle
+            let items = list.compactMap { $0 as? [String: Any] }.compactMap(SearchResultItem.init(entity:))
             return items.isEmpty ? nil : SearchResultSection(title: title, items: items)
         }
+    }
+}
+
+private extension String {
+    func dropPrefix(_ prefix: String) -> String {
+        hasPrefix(prefix) ? String(dropFirst(prefix.count)) : self
+    }
+}
+
+/// 搜索结果条目:按实体类型分型渲染(对齐原版搜索行为)。
+enum SearchResultKind: String, Hashable {
+    case feed, apk, topic, user, other
+
+    var label: String {
+        switch self {
+        case .feed: "动态"
+        case .apk: "应用"
+        case .topic: "话题"
+        case .user: "用户"
+        case .other: "结果"
+        }
+    }
+}
+
+struct SearchResultItem: Identifiable, Hashable {
+    let id: String
+    let kind: SearchResultKind
+    let title: String
+    let subtitle: String
+    let avatarURL: URL?
+    let likeCount: Int
+    let replyCount: Int
+    let feedID: String?
+
+    init?(entity: [String: Any]) {
+        let rawKind = (CoolapkJSON.string(entity["entityType"]) ?? "").lowercased()
+        let hasFans = CoolapkJSON.int(entity["fansnum"]) > 0
+        let hasScore = CoolapkJSON.string(entity["score"]) != nil
+            || CoolapkJSON.string(entity["apkname"]) != nil
+
+        if rawKind.contains("user") || (!rawKind.isEmpty && hasFans) {
+            kind = .user
+        } else if rawKind.contains("apk") || rawKind.contains("app") || hasScore {
+            kind = .apk
+        } else if rawKind.contains("topic") {
+            kind = .topic
+        } else if rawKind.contains("feed") {
+            kind = .feed
+        } else if CoolapkJSON.string(entity["fansnum"]) != nil {
+            kind = .user
+        } else {
+            kind = .other
+        }
+
+        guard let id = CoolapkJSON.string(entity["id"]) else { return nil }
+        self.id = kind.rawValue + "_" + id
+
+        var rawTitle = ""
+        var rawSubtitle = ""
+        var rawAvatar: URL?
+
+        switch kind {
+        case .user:
+            rawTitle = CoolapkJSON.username(entity)
+            rawSubtitle = CoolapkJSON.int(entity["fansnum"]) > 0
+                ? "粉丝 \(CoolapkJSON.int(entity["fansnum"]))" : ""
+            rawAvatar = CoolapkJSON.avatar(entity)
+        case .apk:
+            rawTitle = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["title"]) ?? "")
+            rawSubtitle = CoolapkJSON.string(entity["apkname"]) ?? ""
+            rawAvatar = CoolapkJSON.pics(entity).first
+        case .topic:
+            rawTitle = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["title"]) ?? "")
+            rawSubtitle = CoolapkJSON.int(entity["commentnum"]) > 0
+                ? "讨论 \(CoolapkJSON.int(entity["commentnum"]))" : ""
+            rawAvatar = CoolapkJSON.pics(entity).first
+        default:
+            rawTitle = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["title"]) ?? "")
+            rawSubtitle = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["message"]) ?? "")
+            rawAvatar = CoolapkJSON.avatar(entity)
+        }
+        self.likeCount = CoolapkJSON.int(entity["likenum"])
+        self.replyCount = CoolapkJSON.int(entity["replynum"])
+
+        let finalTitle = rawTitle.isEmpty ? rawSubtitle : rawTitle
+        self.title = finalTitle
+        self.subtitle = rawTitle.isEmpty ? "" : rawSubtitle
+        self.avatarURL = rawAvatar
+
+        feedID = (kind == .feed && !finalTitle.isEmpty) ? id : nil
+        if finalTitle.isEmpty && kind != .feed { return nil }
+        if kind == .feed && finalTitle.isEmpty && CoolapkJSON.pics(entity).isEmpty { return nil }
     }
 }
 
