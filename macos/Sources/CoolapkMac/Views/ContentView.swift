@@ -175,6 +175,34 @@ struct FeedListView: View {
             }
         }
         .listStyle(.inset)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            // 站内搜索条:macOS 26 工具栏 TextField 的玻璃透镜尺寸失控(巨圆 bug),
+            // 因此放列内而不是工具栏
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("搜索应用、动态、用户、话题", text: $model.searchQuery)
+                    .textFieldStyle(.plain)
+                    .onSubmit {
+                        Task { await model.runSearch() }
+                    }
+                if !model.searchQuery.isEmpty {
+                    Button {
+                        model.searchQuery = ""
+                        model.clearSearch()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.45), in: Capsule())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+        }
         .overlay {
             if !model.isSearchActive && model.feeds.isEmpty {
                 ContentUnavailableView(
@@ -196,32 +224,6 @@ struct FeedListView: View {
         }
         .navigationTitle(currentTitle)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                // 对齐原版:居中搜索框,覆盖 应用/动态/用户/话题
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("搜索应用、动态、用户、话题", text: $model.searchQuery)
-                        .textFieldStyle(.plain)
-                        .onSubmit {
-                            Task { await model.runSearch() }
-                        }
-                    if !model.searchQuery.isEmpty {
-                        Button {
-                            model.searchQuery = ""
-                            model.clearSearch()
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(.quaternary.opacity(0.55), in: Capsule())
-                .frame(maxWidth: 380)
-            }
             if model.isSearchActive {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
