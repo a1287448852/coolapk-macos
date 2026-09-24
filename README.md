@@ -16,6 +16,11 @@
 > [!IMPORTANT]
 > 本项目是社区维护的非官方客户端，与酷安官方及深圳酷安网络科技有限公司无隶属、授权或合作关系。酷安名称、Logo 和相关商标归其权利人所有。
 
+> [!NOTE]
+> **关于本仓库**：本项目是 [daimiaopeng/coolapk-desktop](https://github.com/daimiaopeng/coolapk-desktop) 的二次开发修改版（非官方副本），遵循其 MIT 许可证，原版权声明见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。
+> - `main` 分支与上游保持一致
+> - `macos-native` 分支是本仓库的主要改动：面向 macOS 26+ / Apple Silicon 的原生 SwiftUI 重写（复用上游的 Rust 核心 `crates/coolapk-core`）
+
 ## 📥 下载与安装
 
 请前往 [👉 GitHub Releases](https://github.com/daimiaopeng/coolapk-desktop/releases) 获取各平台的最新版本程序包：
