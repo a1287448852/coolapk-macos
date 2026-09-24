@@ -7427,10 +7427,11 @@ impl CoolapkClient {
         let raw = self
             .api_get(
                 "/v6/apk/downloadVersionList",
-                &[("id", apk_id), ("page", "1".to_string())],
+                &[("id", apk_id.clone()), ("page", "1".to_string())],
             )
             .await?;
-        Ok(json!({ "code": 200, "data": raw.get("data").cloned().unwrap_or(json!([])) }))
+        // aid 一并透出:原生客户端用它构造 v6/apk/download 官方下载地址
+        Ok(json!({ "code": 200, "data": raw.get("data").cloned().unwrap_or(json!([])), "aid": apk_id.clone() }))
     }
 
     /// 图片列表(按标签)

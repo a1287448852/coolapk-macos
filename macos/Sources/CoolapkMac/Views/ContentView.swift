@@ -695,6 +695,8 @@ struct RemoteImage: View {
             }
         }
         .task(id: url) { await load() }
+        // 装饰性图片对旁白和 AX 巡检都是噪音:整棵无障碍树会因列表大图超时
+        .accessibilityHidden(true)
     }
 
     /// 酷安图片 CDN 有反爬:需要浏览器 UA + 官方 Referer,直连 URLSession 即可。

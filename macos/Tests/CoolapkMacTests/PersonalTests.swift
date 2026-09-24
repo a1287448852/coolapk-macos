@@ -75,30 +75,6 @@ final class PersonalTests: XCTestCase {
 
     // MARK: 下载版本
 
-    func testDownloadVersionParseListOverridesPackageNameAndUpgradesURLToHTTPS() throws {
-        let json = """
-        {"data":[{"url":"http://apk.coolapk.com/x.apk","version_name":"v1.0"}]}
-        """
-        let versions = DownloadVersion.parseList(fromJSONString: json, packageName: "com.test")
-        XCTAssertEqual(versions.count, 1, "应解析出 1 个版本,实际 \(versions.count)")
-
-        let version = try XCTUnwrap(versions.first)
-        XCTAssertEqual(version.packageName, "com.test", "packageName 应被入参覆盖")
-        XCTAssertEqual(version.versionName, "v1.0")
-        XCTAssertEqual(
-            version.url.absoluteString,
-            "https://apk.coolapk.com/x.apk",
-            "下载地址应升级为 https"
-        )
-    }
-
-    func testDownloadVersionWithoutAPKSuffixIsFiltered() {
-        let json = """
-        {"data":[{"url":"https://example.com/page","version_name":"v1.0"}]}
-        """
-        let versions = DownloadVersion.parseList(fromJSONString: json, packageName: "com.test")
-        XCTAssertTrue(versions.isEmpty, "非 .apk 下载地址应被过滤,实际 \(versions.count) 条")
-    }
 }
 
 /// 搜索结果分型解析(话题/应用/用户/动态,对齐原版搜索行为)。

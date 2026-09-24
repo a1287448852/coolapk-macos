@@ -61,6 +61,11 @@ struct ChatUser: Identifiable, Hashable {
 
     var id: String { ukey.isEmpty ? uid : ukey }
 
+    /// 系统会话(如官方"酷友")可能没有 dateline,1970 纪元显示"56年前"
+    var hasValidDateline: Bool {
+        dateline.timeIntervalSince1970 > 100_000_000
+    }
+
     init?(entity: [String: Any]) {
         let uid = CoolapkJSON.string(entity["uid"]) ?? CoolapkJSON.string(entity["id"]) ?? ""
         guard !uid.isEmpty else { return nil }

@@ -285,21 +285,59 @@ impl CoolapkApi {
 
     // MARK: APK 下载
 
-    pub async fn get_download_version_list(&self, package_name: String) -> UniResult<String> {
-        to_json_string(
-            self.client
-                .get_download_version_list(&package_name)
-                .await
-                .map_err(CoolapkError::from_string)?,
-        )
+    /// 解析包名 → 最新版本的官方下载地址(带 aid/versionCode,配合签名请求头使用)。
+    pub async fn resolve_latest_apk_download(&self, package_name: String) -> UniResult<String> {
+        let value = self
+            .client
+            .get_download_version_list(&package_name)
+            .await
+            .map_err(CoolapkError::from_string)?;
+        let aid = value["aid"].as_str().unwrap_or_default();
+        let versions = value["data"].as_array().cloned().unwrap_or_default();
+        let first = versions.first().cloned().unwrap_or(serde_json::Value::Null);
+        let version_code = first
+            .get("versionCode")
+            .map(|v| match v {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+        if aid.is_empty() || version_code.is_empty() {
+            return Err(CoolapkError::Failed {
+                message: "没有找到可下载的版本".into(),
+            });
+        }
+        let url = format!(
+            "https://api.coolapk.com/v6/apk/download?pn={}&aid={}&vc={}&extra=",
+            package_name, aid, version_code
+        );
+        let version_name = first
+            .get("versionName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        to_json_string(serde_json::json!({
+            "url": url,
+            "packageName": package_name,
+            "versionName": version_name,
+            "versionCode": version_code
+        }))
     }
 
     /// 导出带签名与设备指纹的请求头(JSON 对象),供 Swift URLSession 下载 APK 使用。
+    ///
+    /// 必须同时带 Dalvik(安卓 App)UA:实测 v6/apk/download 端点对浏览器 UA 返回
+    /// 403/567 反爬挑战,只有安卓 App UA + 指纹头组合才返回 200 + APK 流。
     pub fn download_headers(&self) -> UniResult<String> {
         let request = self
             .client
             .apply_download_headers(reqwest::Client::new().get("https://api.coolapk.com/"))
             .map_err(CoolapkError::from_string)?
+            .header(
+                reqwest::header::USER_AGENT,
+                "Dalvik/2.1.0 (Linux; U; Android 16; 23113RKC6C Build/AQ3A.250226.002) +CoolMarket/16.2.0-2604201-universal",
+            )
+            .header(reqwest::header::REFERER, "https://www.coolapk.com/")
             .build()
             .map_err(|e| CoolapkError::Failed { message: format!("build request failed: {e}") })?;
         let map: serde_json::Map<String, serde_json::Value> = request

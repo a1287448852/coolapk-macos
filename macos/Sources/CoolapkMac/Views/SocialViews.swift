@@ -217,10 +217,12 @@ private struct ChatUserRowView: View {
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    Text(chat.dateline, format: .coolapkRelative)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+                    if chat.hasValidDateline {
+                        Text(chat.dateline, format: .coolapkRelative)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                 }
                 Text(chat.lastMessage.isEmpty ? "(无内容)" : chat.lastMessage)
                     .font(.callout)

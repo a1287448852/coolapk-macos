@@ -126,6 +126,9 @@ final class AppModel {
     private(set) var statusText = ""
     private var page = 1
     private var hasMoreFeeds = true
+    // 代数计数:快速切换分类/会话/话题时,只有最新一次请求的结果落地
+    private var feedsGeneration = 0
+    private var activeFeedLoads = 0
     private var isLoadingFeeds = false
 
     // MARK: 侧栏导航
@@ -139,14 +142,11 @@ final class AppModel {
             case .feed(let newCategory):
                 if newCategory != category { category = newCategory }
             case .favorites:
-                personalKind = .favorites
-                if personalFeeds.isEmpty { Task { await loadPersonalList(reset: true) } }
+                setPersonalKind(.favorites)
             case .following:
-                personalKind = .following
-                if personalFeeds.isEmpty { Task { await loadPersonalList(reset: true) } }
+                setPersonalKind(.following)
             case .history:
-                personalKind = .history
-                if personalFeeds.isEmpty { Task { await loadPersonalList(reset: true) } }
+                setPersonalKind(.history)
             case .notifications, .messages, .downloads:
                 break
             }
@@ -350,14 +350,16 @@ final class AppModel {
     }
 
     func loadMoreIfNeeded(current feed: FeedItem) async {
-        guard feed.id == feeds.last?.id, hasMoreFeeds, !isLoadingFeeds else { return }
+        guard feed.id == feeds.last?.id, hasMoreFeeds else { return }
         await loadFeeds(reset: false)
     }
 
     func loadFeeds(reset: Bool) async {
-        guard !isLoadingFeeds else { return }
+        // 代数模式:快速切换分类时新旧请求并发,只有最新一代的结果落地
+        feedsGeneration += 1
+        let generation = feedsGeneration
+        activeFeedLoads += 1
         isLoadingFeeds = true
-        defer { isLoadingFeeds = false }
 
         if reset {
             page = 1
@@ -388,6 +390,10 @@ final class AppModel {
                 json = try await api.getRankFeeds(rankType: "picture", page: UInt32(page))
             }
 
+            defer { activeFeedLoads -= 1 }
+            guard generation == feedsGeneration else { return }
+            if activeFeedLoads == 0 { isLoadingFeeds = false }
+
             let parsed = CoolapkJSON.entities(fromJSONString: json)
                 .compactMap(FeedItem.init(entity:))
             if reset {
@@ -399,10 +405,15 @@ final class AppModel {
             hasMoreFeeds = !parsed.isEmpty
             if reset { page = 2 } else { page += 1 }
             if feeds.isEmpty { statusText = "暂无内容" }
-        } catch let error as CoolapkError {
-            if case .Failed(let message) = error { statusText = "加载失败:\(Self.friendlyError(message))" }
         } catch {
-            statusText = "加载失败:\(error.localizedDescription)"
+            defer { activeFeedLoads -= 1 }
+            guard generation == feedsGeneration else { return }
+            if activeFeedLoads == 0 { isLoadingFeeds = false }
+            if let error = error as? CoolapkError, case .Failed(let message) = error {
+                statusText = "加载失败:\(Self.friendlyError(message))"
+            } else {
+                statusText = "加载失败:\(error.localizedDescription)"
+            }
         }
     }
 
@@ -452,10 +463,15 @@ final class AppModel {
         isLoadingDetail = true
         defer { isLoadingDetail = false }
         do {
-            detail = FeedDetail.parse(fromJSONString: try await api.getFeedDetail(feedId: feedID))
+            let json = try await api.getFeedDetail(feedId: feedID)
+            // 用户已点开另一条动态:丢弃过期结果
+            guard selectedFeedID == feedID else { return }
+            detail = FeedDetail.parse(fromJSONString: json)
         } catch let error as CoolapkError {
+            guard selectedFeedID == feedID else { return }
             if case .Failed(let message) = error { detailError = Self.friendlyError(message) }
         } catch {
+            guard selectedFeedID == feedID else { return }
             detailError = error.localizedDescription
         }
     }
@@ -474,6 +490,8 @@ final class AppModel {
 
         do {
             let json = try await api.getFeedReplies(feedId: feedID, page: UInt32(repliesPage))
+            // 已切换到别的动态:丢弃过期结果
+            guard selectedFeedID == feedID else { return }
             let parsed = CoolapkJSON.entities(fromJSONString: json)
                 .compactMap(ReplyItem.init(entity:))
             if reset {
@@ -484,10 +502,8 @@ final class AppModel {
             }
             hasMoreReplies = !parsed.isEmpty
             if reset { repliesPage = 2 } else { repliesPage += 1 }
-        } catch let error as CoolapkError {
-            if case .Failed(let message) = error { statusText = "评论加载失败:\(Self.friendlyError(message))" }
         } catch {
-            statusText = "评论加载失败:\(error.localizedDescription)"
+            // 过期结果静默丢弃,不打扰当前浏览
         }
     }
 
@@ -560,14 +576,14 @@ final class AppModel {
         guard let data = json.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return 0 }
-        if let number = root["data"] as? NSNumber { return number.intValue }
+        // count 接口:{"data":{"atme":1,"commentme":0,...,"dateline":<时间戳>}}
+        // 已知计数键求和;dateline 是时间戳,绝不能计入
+        let counters = ["atme", "atcommentme", "commentme", "feedlike", "notification", "message"]
         guard let payload = root["data"] as? [String: Any] else { return 0 }
-        if let total = payload["total"] as? NSNumber { return total.intValue }
-        // 任意数字字段兜底(跳过 code/status 之类的状态码)
-        for (key, value) in payload where key != "code" && key != "status" {
-            if let number = value as? NSNumber { return number.intValue }
+        let total = counters.reduce(0) { sum, key in
+            sum + ((payload[key] as? NSNumber)?.intValue ?? 0)
         }
-        return 0
+        return min(total, 99)
     }
 
     // MARK: 私信
@@ -743,6 +759,14 @@ final class AppModel {
     private var hasMorePersonalFeeds = true
     private var isLoadingPersonal = false
 
+    /// 切换个人列表类型:类型变化(或列表为空)时重新拉取,避免显示上一个列表的数据。
+    func setPersonalKind(_ kind: PersonalListKind) {
+        guard personalKind != kind || personalFeeds.isEmpty else { return }
+        personalKind = kind
+        personalFeeds = []
+        Task { await loadPersonalList(reset: true) }
+    }
+
     func loadPersonalList(reset: Bool) async {
         guard !isLoadingPersonal, let kind = personalKind else { return }
         isLoadingPersonal = true
@@ -797,22 +821,26 @@ final class AppModel {
     let downloads = DownloadManager.shared
     var newPackageName = ""
 
-    /// 包名 → 版本列表 → 取第一个可用版本入下载队列。
+    /// 包名 → Rust 侧解析 aid + 最新版本 → 组官方 v6/apk/download 地址入下载队列。
     func resolveAndDownload() async {
         let packageName = newPackageName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !packageName.isEmpty else { return }
         do {
-            let json = try await api.getDownloadVersionList(packageName: packageName)
-            let versions = DownloadVersion.parseList(fromJSONString: json, packageName: packageName)
-            guard let version = versions.first else {
-                downloads.statusText = "没有找到「\(packageName)」的可用版本"
+            let json = try await api.resolveLatestApkDownload(packageName: packageName)
+            guard let data = json.data(using: .utf8),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let urlString = CoolapkJSON.string(root["url"]),
+                  let url = URL(string: urlString)
+            else {
+                downloads.statusText = "解析结果异常"
                 return
             }
-            downloads.start(url: version.url, packageName: version.packageName, versionName: version.versionName)
+            let versionName = CoolapkJSON.string(root["versionName"]) ?? ""
+            downloads.start(url: url, packageName: packageName, versionName: versionName)
         } catch let error as CoolapkError {
-            if case .Failed(let message) = error { downloads.statusText = "查询失败:\(Self.friendlyError(message))" }
+            if case .Failed(let message) = error { downloads.statusText = "解析失败:\(Self.friendlyError(message))" }
         } catch {
-            downloads.statusText = "查询失败:\(error.localizedDescription)"
+            downloads.statusText = "解析失败:\(error.localizedDescription)"
         }
     }
 
