@@ -75,7 +75,12 @@ struct SidebarView: View {
     var body: some View {
         List(selection: Binding(
             get: { model.entry },
-            set: { model.entry = $0 ?? model.entry }
+            set: { newValue in
+                // 任何侧栏点击都先退出搜索态:否则中栏停留在搜索结果,
+                // 看起来像"点了首页却切不过去"
+                if model.isSearchActive { model.clearSearch() }
+                model.entry = newValue ?? model.entry
+            }
         )) {
             Section("社区") {
                 ForEach(Self.feedCategories) { category in
@@ -171,7 +176,9 @@ struct FeedListView: View {
         List(selection: Binding(
             get: { model.selectedFeedID },
             set: { id in
-                guard let id else { return }
+                // 搜索结果行的隐式选择值是 "topic_xxx" 这类前缀 id,
+                // 不能当 feedID 用;搜索行一律走 SearchResultRow 自己的按钮路由
+                guard let id, !model.isSearchActive else { return }
                 Task { await model.select(feedID: id) }
             }
         )) {
@@ -343,8 +350,22 @@ struct FeedListView: View {
                 Section(section.title) {
                     ForEach(section.items) { item in
                         SearchResultRow(item: item, label: section.title) {
-                            if let feedID = item.feedID {
-                                Task { await model.select(feedID: feedID) }
+                            switch item.kind {
+                            case .feed:
+                                if let feedID = item.feedID {
+                                    Task { await model.select(feedID: feedID) }
+                                }
+                            case .user:
+                                break // 用户主页未实现
+                            default:
+                                // 话题直接用标题;数码产品先匹配同名话题实体再进话题面板
+                                Task {
+                                    if let tag = model.topicTag(forProductTitle: item.title) {
+                                        await model.openTopic(tag: tag)
+                                    } else {
+                                        await model.openTopic(tag: item.title)
+                                    }
+                                }
                             }
                         }
                     }
@@ -417,7 +438,7 @@ struct SearchResultRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(item.feedID == nil)
+        .disabled(item.kind == .user)
     }
 }
 
@@ -498,6 +519,25 @@ struct FeedDetailView: View {
                             }
                             if !item.picURLs.isEmpty {
                                 PicGrid(urls: item.picURLs)
+                            }
+                            Divider()
+                        } else if let id = model.selectedFeedID,
+                                  let summary = model.searchItem(forFeedID: id) {
+                            // 从搜索结果打开的动态不在 feeds 列表:用搜索实体渲染摘要头部
+                            HStack(spacing: 10) {
+                                AvatarView(url: summary.avatarURL, size: 40)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(summary.title)
+                                        .font(.headline)
+                                        .lineLimit(1)
+                                    if !summary.subtitle.isEmpty {
+                                        Text(summary.subtitle)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(2)
+                                    }
+                                }
+                                Spacer()
                             }
                             Divider()
                         }
@@ -700,21 +740,36 @@ struct RemoteImage: View {
     }
 
     /// 酷安图片 CDN 有反爬:需要浏览器 UA + 官方 Referer,直连 URLSession 即可。
+    /// 单次请求偶发非 200/超时:指数退避重试两次,仍失败才停留在占位图。
     private func load() async {
         guard let url else { return }
         if let cached = CDNImageCache.shared.object(forKey: url as NSURL) {
             image = cached
             return
         }
-        do {
-            let (data, response) = try await CDNImageCache.session.data(for: CDNImageCache.request(for: url))
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                  let decoded = NSImage(data: data)
-            else { return }
-            CDNImageCache.shared.setObject(decoded, forKey: url as NSURL)
-            image = decoded
-        } catch {
-            // 静默:占位图兜底,避免列表被单图失败刷屏
+        for attempt in 0..<3 {
+            do {
+                let (data, response) = try await CDNImageCache.session.data(for: CDNImageCache.request(for: url))
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let decoded = NSImage(data: data)
+                else {
+                    if attempt < 2 {
+                        try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
+                        continue
+                    }
+                    return
+                }
+                CDNImageCache.shared.setObject(decoded, forKey: url as NSURL)
+                image = decoded
+                return
+            } catch {
+                // 静默:占位图兜底,避免列表被单图失败刷屏
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
+                    continue
+                }
+                return
+            }
         }
     }
 }

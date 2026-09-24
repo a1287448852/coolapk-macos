@@ -46,7 +46,9 @@ struct NotificationsView: View {
                     .padding(.top, 8)
 
                     if model.notifications.isEmpty {
+                        // 撑满剩余空间:标签条钉在顶部,空态在余下区域垂直居中
                         emptyState
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         notificationList
                     }
@@ -94,7 +96,7 @@ struct NotificationsView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if model.notificationsStatus.isEmpty {
+        if model.notificationsStatus.isEmpty || model.notificationsStatus == "暂无通知" {
             ContentUnavailableView("暂无通知", systemImage: "bell", description: Text("下拉刷新试试"))
         } else {
             ContentUnavailableView("暂无通知", systemImage: "bell", description: Text(model.notificationsStatus))
@@ -196,7 +198,7 @@ struct MessagesView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if model.chatListStatus.isEmpty {
+        if model.chatListStatus.isEmpty || model.chatListStatus == "暂无私信" {
             ContentUnavailableView("暂无私信", systemImage: "message", description: Text("下拉刷新试试"))
         } else {
             ContentUnavailableView("暂无私信", systemImage: "message", description: Text(model.chatListStatus))
@@ -242,9 +244,14 @@ private struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            HStack(spacing: 10) {
                 Button("‹ 会话列表") { onBack() }
                     .buttonStyle(.borderless)
+                if let name = model.selectedChat?.username, !name.isEmpty {
+                    Text(name)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -256,11 +263,14 @@ private struct ConversationView: View {
                 ProgressView("加载消息…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.chatMessages.isEmpty {
+                // 撑满剩余空间:返回条贴顶、composer 贴底,空态居中,
+                // 否则整个 VStack 收缩后垂直居中,返回键和输入框悬在半空
                 ContentUnavailableView(
                     "暂无消息",
                     systemImage: "bubble.left.and.bubble.right",
                     description: Text("发送第一条消息吧")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 messageList
             }
@@ -532,7 +542,7 @@ struct PersonalListView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if model.personalStatus.isEmpty {
+        if model.personalStatus.isEmpty || model.personalStatus == "暂无内容" {
             ContentUnavailableView(title, systemImage: "person", description: Text("下拉刷新试试"))
         } else {
             ContentUnavailableView(title, systemImage: "person", description: Text(model.personalStatus))

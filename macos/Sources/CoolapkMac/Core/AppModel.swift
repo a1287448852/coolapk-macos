@@ -440,6 +440,28 @@ final class AppModel {
     func clearSearch() {
         searchSections = nil
         searchStatusText = ""
+        searchQuery = ""
+        // 退出搜索时连带清掉详情/话题栈,否则右列会残留搜索期间打开的僵尸面板
+        selectedFeedID = nil
+        detail = nil
+        detailError = nil
+        replies = []
+        selectedTopicTag = nil
+        topicFeeds = []
+    }
+
+    /// 搜索结果里打开的动态不在 feeds 列表中,风控降级时从搜索结果里找摘要。
+    func searchItem(forFeedID feedID: String) -> SearchResultItem? {
+        searchSections?.flatMap(\.items).first { $0.feedID == feedID }
+    }
+
+    /// 数码产品名不是话题名("小米18 Pro Max" vs 话题"小米18ProMax"),
+    /// 直接拉话题流会得到空列表;先在同一次搜索结果里找同名话题实体。
+    func topicTag(forProductTitle title: String) -> String? {
+        let key = title.filter { !$0.isWhitespace }
+        return searchSections?.flatMap(\.items).first {
+            $0.kind == .topic && $0.title.filter { !$0.isWhitespace } == key
+        }?.title
     }
 
     // MARK: 详情与回复
