@@ -2,6 +2,13 @@ import Foundation
 import CoolapkCoreSwift
 import Observation
 
+/// 图片查看器载荷:要看的图组 + 起始下标。
+struct ImageViewerPayload: Identifiable {
+    let urls: [URL]
+    let index: Int
+    var id: String { urls.map(\.absoluteString).joined(separator: "|") + "#\(index)" }
+}
+
 extension CoolapkApi {
     /// 单例:cookie/设备码持久化到 Application Support/CoolapkMac。
     static let shared: CoolapkApi = CoolapkApi(cookieStorePath: CoolapkApi.makeStoreURL().path)
@@ -632,6 +639,22 @@ final class AppModel {
             sum + ((payload[key] as? NSNumber)?.intValue ?? 0)
         }
         return min(total, 99)
+    }
+
+    // MARK: 图片查看器(全窗口)
+
+    /// 当前查看的图组与下标;nil = 关闭。挂在 ContentView 根部 overlay。
+    var imageViewer: ImageViewerPayload?
+
+    func openImageViewer(urls: [URL], index: Int) {
+        let shown = urls.prefix(20)
+        guard !shown.isEmpty else { return }
+        let clamped = min(max(0, index), shown.count - 1)
+        imageViewer = ImageViewerPayload(urls: Array(shown), index: clamped)
+    }
+
+    func closeImageViewer() {
+        imageViewer = nil
     }
 
     // MARK: 发布动态

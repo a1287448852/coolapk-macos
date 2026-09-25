@@ -22,6 +22,14 @@ struct ContentView: View {
             detailColumn
         }
         .environment(model)
+        .overlay {
+            // 全窗口图片查看器:所有列表/详情的图片点击都汇聚到这里
+            if let payload = model.imageViewer {
+                ImageViewerOverlay(payload: payload, model: model)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: model.imageViewer != nil)
     }
 
     /// 中列:按侧栏入口路由(社交/我的页由 SocialViews.swift 提供)。
@@ -465,6 +473,8 @@ struct AvatarView: View {
 
 struct RemoteImage: View {
     let url: URL?
+    /// 请求的 CDN 缩放宽度和解码上限:列表小格子不再解码整幅原图(4000px)。
+    var pixelWidth: Int = 720
     @State private var image: NSImage?
 
     var body: some View {
@@ -482,38 +492,10 @@ struct RemoteImage: View {
         .accessibilityHidden(true)
     }
 
-    /// 酷安图片 CDN 有反爬:需要浏览器 UA + 官方 Referer,直连 URLSession 即可。
-    /// 单次请求偶发非 200/超时:指数退避重试两次,仍失败才停留在占位图。
     private func load() async {
         guard let url else { return }
-        if let cached = CDNImageCache.shared.object(forKey: url as NSURL) {
-            image = cached
-            return
-        }
-        for attempt in 0..<3 {
-            do {
-                let (data, response) = try await CDNImageCache.session.data(for: CDNImageCache.request(for: url))
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                      let decoded = NSImage(data: data)
-                else {
-                    if attempt < 2 {
-                        try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
-                        continue
-                    }
-                    return
-                }
-                CDNImageCache.shared.setObject(decoded, forKey: url as NSURL)
-                image = decoded
-                return
-            } catch {
-                // 静默:占位图兜底,避免列表被单图失败刷屏
-                if attempt < 2 {
-                    try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
-                    continue
-                }
-                return
-            }
-        }
+        let decoded = await CDNImageCache.image(for: url, pixelWidth: pixelWidth)
+        image = decoded
     }
 }
 
@@ -537,6 +519,71 @@ enum CDNImageCache {
         request.setValue("https://www.coolapk.com/", forHTTPHeaderField: "Referer")
         request.cachePolicy = .returnCacheDataElseLoad
         return request
+    }
+
+    /// 酷安图片 CDN 是阿里云 OSS:追加 x-oss-process 服务端缩放,
+    /// 4000px 原图(数百 KB→数 MB)在列表场景 10 倍瘦身。非本 CDN 域名原样返回。
+    static func sizedURL(_ url: URL, pixelWidth: Int) -> URL {
+        guard url.host == "image.coolapk.com" else { return url }
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        let process = "x-oss-process=image/resize,m_lfit,w_\(pixelWidth)"
+        if let existing = components?.query, !existing.isEmpty {
+            components?.query = existing + "&" + process
+        } else {
+            components?.query = process
+        }
+        return components?.url ?? url
+    }
+
+    /// 取图(带内存缓存 + 重试):按 pixelWidth 请求缩放变体,
+    /// 并用 ImageIO 降采样解码,杜绝 4000 万像素原图整幅解码。
+    static func image(for url: URL, pixelWidth: Int) async -> NSImage? {
+        let sized = sizedURL(url, pixelWidth: pixelWidth)
+        if let cached = shared.object(forKey: sized as NSURL) {
+            return cached
+        }
+        for attempt in 0..<3 {
+            do {
+                let (data, response) = try await session.data(for: request(for: sized))
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let decoded = downsampledImage(from: data, maxPixel: pixelWidth * 2)
+                else {
+                    if attempt < 2 {
+                        try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
+                        continue
+                    }
+                    return nil
+                }
+                shared.setObject(decoded, forKey: sized as NSURL)
+                return decoded
+            } catch {
+                // 静默:占位图兜底,避免列表被单图失败刷屏
+                if attempt < 2 {
+                    try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
+                    continue
+                }
+                return nil
+            }
+        }
+        return nil
+    }
+
+    /// ImageIO 降采样解码:maxPixel 限制最长边,解码内存从数百 MB 降到几 MB。
+    private static func downsampledImage(from data: Data, maxPixel: Int) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
     }
 }
 

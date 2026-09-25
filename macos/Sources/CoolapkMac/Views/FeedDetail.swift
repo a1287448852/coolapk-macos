@@ -180,7 +180,7 @@ struct FeedDetailView: View {
 /// 不复用 ContentView.swift 里的 PicGrid:那是禁改文件,且本网格需要点击态。
 struct DetailPicGrid: View {
     let urls: [URL]
-    @State private var viewer: FeedImageViewerContext?
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         let shown = Array(urls.prefix(9))
@@ -195,15 +195,12 @@ struct DetailPicGrid: View {
                     .clipped()
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        viewer = FeedImageViewerContext(urls: shown, index: index)
+                        model.openImageViewer(urls: shown, index: index)
                     }
                     .help("查看大图")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(item: $viewer) { context in
-            FeedImageViewerSheet(context: context)
-        }
     }
 }
 

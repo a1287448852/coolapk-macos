@@ -234,7 +234,7 @@ extension ForwardedFeed {
 /// 杜绝 scaledToFill 大图按原始尺寸撑爆卡片。点击任意格子弹出大图查看器。
 struct FeedCardImageGrid: View {
     let urls: [URL]
-    @State private var viewer: FeedImageViewerContext?
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         let shown = Array(urls.prefix(9))
@@ -264,9 +264,6 @@ struct FeedCardImageGrid: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(item: $viewer) { context in
-            FeedImageViewerSheet(context: context)
-        }
     }
 
     /// 固定高度 + 宽度由布局提案决定;图片 fill 后强制裁切。
@@ -280,159 +277,9 @@ struct FeedCardImageGrid: View {
             .clipped()
             .contentShape(Rectangle())
             .onTapGesture {
-                viewer = FeedImageViewerContext(urls: shown, index: index)
+                model.openImageViewer(urls: shown, index: index)
             }
             .help("查看大图")
-    }
-}
-
-// MARK: - 图片查看器(卡片/详情共用)
-
-/// sheet(item:) 的载荷:要看的图组 + 起始下标。
-struct FeedImageViewerContext: Identifiable {
-    let urls: [URL]
-    let index: Int
-    var id: String { urls.map(\.absoluteString).joined(separator: "|") + "#\(index)" }
-}
-
-/// 轻量大图查看器:左右翻页(箭头按钮/方向键),Esc 或点击背景关闭。
-struct FeedImageViewerSheet: View {
-    let context: FeedImageViewerContext
-    @State private var index: Int
-    @Environment(\.dismiss) private var dismiss
-
-    init(context: FeedImageViewerContext) {
-        self.context = context
-        // clamp 防御越界
-        _index = State(initialValue: min(max(0, context.index), max(0, context.urls.count - 1)))
-    }
-
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { dismiss() }
-
-            VStack(spacing: 0) {
-                HStack {
-                    Text("\(index + 1) / \(context.urls.count)")
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(12)
-                    Spacer()
-                    Button {
-                        dismiss()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                    .buttonStyle(.plain)
-                    .keyboardShortcut(.cancelAction)
-                    .padding(12)
-                }
-
-                ViewerImage(url: context.urls[index])
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .id(context.urls[index])
-
-                HStack {
-                    // 隐藏的方向键按钮:方向键翻页(窗口为 key 时生效)
-                    Button("上一张") { move(-1) }
-                        .keyboardShortcut(.leftArrow)
-                        .opacity(0)
-                        .frame(width: 0, height: 0)
-                    Button("下一张") { move(1) }
-                        .keyboardShortcut(.rightArrow)
-                        .opacity(0)
-                        .frame(width: 0, height: 0)
-
-                    Spacer()
-
-                    Button {
-                        move(-1)
-                    } label: {
-                        Image(systemName: "chevron.left.circle.fill")
-                            .font(.title)
-                            .foregroundStyle(index == 0 ? .white.opacity(0.25) : .white.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(index == 0)
-
-                    Spacer()
-
-                    Button {
-                        move(1)
-                    } label: {
-                        Image(systemName: "chevron.right.circle.fill")
-                            .font(.title)
-                            .foregroundStyle(index == context.urls.count - 1 ? .white.opacity(0.25) : .white.opacity(0.8))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(index == context.urls.count - 1)
-
-                    Spacer()
-                }
-                .padding(.vertical, 14)
-            }
-        }
-    }
-
-    private func move(_ delta: Int) {
-        let next = index + delta
-        guard context.urls.indices.contains(next) else { return }
-        withAnimation(.easeInOut(duration: 0.15)) { index = next }
-    }
-}
-
-/// 查看器大图:独立加载(scaledToFit),复用 CDNImageCache 与列表共享内存缓存。
-private struct ViewerImage: View {
-    let url: URL
-    @State private var image: NSImage?
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                ProgressView("加载大图…")
-                    .controlSize(.large)
-            }
-        }
-        .task(id: url) { await load() }
-        .accessibilityHidden(true)
-    }
-
-    private func load() async {
-        if let cached = CDNImageCache.shared.object(forKey: url as NSURL) {
-            image = cached
-            return
-        }
-        for attempt in 0..<3 {
-            do {
-                let (data, response) = try await CDNImageCache.session.data(for: CDNImageCache.request(for: url))
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                      let decoded = NSImage(data: data)
-                else {
-                    if attempt < 2 {
-                        try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
-                        continue
-                    }
-                    return
-                }
-                CDNImageCache.shared.setObject(decoded, forKey: url as NSURL)
-                image = decoded
-                return
-            } catch {
-                if attempt < 2 {
-                    try? await Task.sleep(nanoseconds: UInt64(400_000_000) << attempt)
-                    continue
-                }
-                return
-            }
-        }
     }
 }
 
@@ -441,7 +288,7 @@ private struct ViewerImage: View {
 /// 旧版列表行:保留给潜在外部引用(搜索结果等已改用 FeedCardView)。
 struct FeedRowView: View {
     let feed: FeedItem
-    @State private var viewer: FeedImageViewerContext?
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -477,12 +324,9 @@ struct FeedRowView: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 6))
                                 .contentShape(Rectangle())
                                 .onTapGesture {
-                                    viewer = FeedImageViewerContext(urls: feed.picURLs, index: index)
+                                    model.openImageViewer(urls: feed.picURLs, index: index)
                                 }
                         }
-                    }
-                    .sheet(item: $viewer) { context in
-                        FeedImageViewerSheet(context: context)
                     }
                 }
 
