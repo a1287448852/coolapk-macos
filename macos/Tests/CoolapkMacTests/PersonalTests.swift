@@ -68,6 +68,52 @@ final class PersonalTests: XCTestCase {
         XCTAssertEqual(feed.displayText, "广州首出小米18promax 16加512g白色", "真实标题应优先展示")
     }
 
+    // MARK: 应用搜索与详情
+
+    /// APK 专项搜索实体:packageName 是包名,标题/图标齐备,kind 为 .apk。
+    func testApkSearchListParse() throws {
+        let json = """
+        {"code":200,"data":[
+          {"id":"10910","title":"微信","packageName":"com.tencent.mm","version":"8.0.78","score":"4.1",
+           "logo":"http://pp.myapp.com/ma_icon/0/icon_1/256","entityType":"apk"},
+          {"id":"1","title":"酷安","packageName":"com.coolapk.market","score":"4.5",
+           "logo":"http://image.coolapk.com/logo.png","entityType":"apk"}
+        ]}
+        """
+        let items = SearchResultSection.parseApkList(fromJSONString: json)
+        XCTAssertEqual(items.count, 2, "应解析出 2 个应用,实际 \(items.count)")
+
+        let wechat = items[0]
+        XCTAssertEqual(wechat.kind, .apk)
+        XCTAssertEqual(wechat.title, "微信")
+        XCTAssertEqual(wechat.apkPackage, "com.tencent.mm", "包名应透出供详情/下载使用")
+        XCTAssertEqual(wechat.subtitle, "com.tencent.mm", "副标题应显示包名")
+        XCTAssertTrue(wechat.avatarURL?.absoluteString.hasPrefix("https://") == true, "图标应升级 https")
+
+        XCTAssertEqual(items[1].apkPackage, "com.coolapk.market")
+    }
+
+    func testApkDetailParse() throws {
+        let json = """
+        {"code":200,"data":{"title":"微信","apkname":"com.tencent.mm",
+         "apkversionname":"8.0.78","score":"4.1",
+         "logo":"http://pp.myapp.com/ma_icon/0/icon_1/256","description":"<p>即时通讯</p>"}}
+        """
+        let detail = try XCTUnwrap(ApkDetail.parse(fromJSONString: json))
+        XCTAssertEqual(detail.packageName, "com.tencent.mm")
+        XCTAssertEqual(detail.title, "微信")
+        XCTAssertEqual(detail.version, "8.0.78")
+        XCTAssertEqual(detail.intro, "即时通讯", "简介应清理 HTML 标签")
+        XCTAssertTrue(detail.logoURL?.absoluteString.hasPrefix("https://") == true)
+    }
+
+    func testApkDetailParseRejectsMissingPackage() {
+        let json = """
+        {"code":200,"data":{"title":"无名应用"}}
+        """
+        XCTAssertNil(ApkDetail.parse(fromJSONString: json), "缺包名的详情应拒绝解析")
+    }
+
     // MARK: 私信会话
 
     func testChatUserParseList() throws {

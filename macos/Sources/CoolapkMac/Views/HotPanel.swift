@@ -153,6 +153,143 @@ struct HotPanel: View {
     }
 }
 
+// MARK: - 应用详情面板
+
+/// 从搜索「应用」分组点入:图标/版本/评分 + 应用简介 + APK 下载按钮。
+struct ApkDetailPanelView: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    model.closeApkDetail()
+                } label: {
+                    Label("返回热榜", systemImage: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let detail = model.apkDetail {
+                        HStack(spacing: 12) {
+                            RemoteImage(url: detail.logoURL)
+                                .frame(width: 64, height: 64)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(detail.title)
+                                    .font(.headline)
+                                    .lineLimit(2)
+                                HStack(spacing: 10) {
+                                    if !detail.version.isEmpty {
+                                        Label(detail.version, systemImage: "number")
+                                    }
+                                    if !detail.score.isEmpty {
+                                        Label(detail.score, systemImage: "star.fill")
+                                            .foregroundStyle(.orange)
+                                    }
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        Text(detail.packageName)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
+                        if !detail.intro.isEmpty {
+                            Divider()
+                            Text(detail.intro)
+                                .font(.body)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    } else if model.apkDetailError.isEmpty {
+                        ProgressView("加载详情…")
+                            .frame(maxWidth: .infinity, minHeight: 120)
+                    } else {
+                        Text("详情加载失败:\(model.apkDetailError)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(20)
+                .frame(maxWidth: 460, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            downloadBar
+        }
+        .navigationTitle("应用")
+    }
+
+    /// 底部下载条:点击解析官方直链入下载队列;已有任务时显示进度。
+    private var downloadBar: some View {
+        VStack(spacing: 8) {
+            Button {
+                Task { await model.downloadSelectedApk() }
+            } label: {
+                Label("下载 APK", systemImage: "arrow.down.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.coolapkGreen)
+            .disabled(model.selectedApkPackage == nil)
+
+            if let task = model.downloads.tasks.first(where: { $0.packageName == model.selectedApkPackage }) {
+                taskStatusLine(task)
+            } else if !model.downloads.statusText.isEmpty {
+                Text(model.downloads.statusText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text("下载进度也可在侧栏「下载」页查看")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private func taskStatusLine(_ task: DownloadManager.DownloadTask) -> some View {
+        switch task.state {
+        case .running:
+            VStack(alignment: .leading, spacing: 3) {
+                ProgressView(
+                    value: task.totalBytes > 0
+                        ? Double(task.downloadedBytes) / Double(task.totalBytes)
+                        : 0
+                )
+                Text("正在下载…可在「下载」页暂停或取消")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        case .paused:
+            Text("已暂停,可在「下载」页继续")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        case .completed:
+            Text("下载完成,可在「下载」页打开安装")
+                .font(.caption2)
+                .foregroundStyle(Color.coolapkGreen)
+        case .failed:
+            Text("下载失败,可重试")
+                .font(.caption2)
+                .foregroundStyle(.red)
+        }
+    }
+}
+
 // MARK: - 话题动态面板
 
 /// 从热门话题挂件点入:展示该话题下的动态列表。

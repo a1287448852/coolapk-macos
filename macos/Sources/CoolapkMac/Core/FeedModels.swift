@@ -214,6 +214,8 @@ struct SearchResultItem: Identifiable, Hashable {
     let likeCount: Int
     let replyCount: Int
     let feedID: String?
+    /// 应用实体的包名(kind == .apk 时用于拉详情与下载)。
+    let apkPackage: String?
 
     init?(entity: [String: Any]) {
         let rawKind = (CoolapkJSON.string(entity["entityType"]) ?? "").lowercased()
@@ -250,7 +252,9 @@ struct SearchResultItem: Identifiable, Hashable {
             rawAvatar = CoolapkJSON.avatar(entity)
         case .apk:
             rawTitle = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["title"]) ?? "")
-            rawSubtitle = CoolapkJSON.string(entity["apkname"]) ?? ""
+            rawSubtitle = CoolapkJSON.string(entity["apkname"])
+                ?? CoolapkJSON.string(entity["packageName"])
+                ?? ""
             rawAvatar = CoolapkJSON.pics(entity).first
         case .topic:
             rawTitle = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["title"]) ?? "")
@@ -271,8 +275,53 @@ struct SearchResultItem: Identifiable, Hashable {
         self.avatarURL = rawAvatar
 
         feedID = (kind == .feed && !finalTitle.isEmpty) ? id : nil
+        apkPackage = kind == .apk
+            ? CoolapkJSON.string(entity["apkname"]) ?? CoolapkJSON.string(entity["packageName"])
+            : nil
         if finalTitle.isEmpty && kind != .feed { return nil }
         if kind == .feed && finalTitle.isEmpty && CoolapkJSON.pics(entity).isEmpty { return nil }
+    }
+}
+
+extension SearchResultSection {
+    /// APK 专项搜索(search_apks 输出的应用实体数组)→ 搜索条目。
+    /// search/all 不返回应用分组,应用结果来自独立的 type=apk 搜索。
+    static func parseApkList(fromJSONString json: String) -> [SearchResultItem] {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = root["data"] as? [Any]
+        else { return [] }
+        return list.compactMap { $0 as? [String: Any] }.compactMap(SearchResultItem.init(entity:))
+    }
+}
+
+/// 应用详情(/v6/apk/detail,容错解析)。
+struct ApkDetail: Identifiable {
+    let packageName: String
+    let title: String
+    let version: String
+    let score: String
+    let logoURL: URL?
+    let intro: String
+
+    var id: String { packageName }
+
+    static func parse(fromJSONString json: String) -> ApkDetail? {
+        guard let data = json.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entity = root["data"] as? [String: Any],
+              let packageName = CoolapkJSON.string(entity["apkname"]) ?? CoolapkJSON.string(entity["packageName"])
+        else { return nil }
+        return ApkDetail(
+            packageName: packageName,
+            title: CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["title"]) ?? packageName),
+            version: CoolapkJSON.string(entity["apkversionname"])
+                ?? CoolapkJSON.string(entity["version"])
+                ?? "",
+            score: CoolapkJSON.string(entity["score"]) ?? "",
+            logoURL: CoolapkJSON.pics(entity).first,
+            intro: CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["description"]) ?? "")
+        )
     }
 }
 

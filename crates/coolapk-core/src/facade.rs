@@ -218,6 +218,11 @@ impl CoolapkApi {
         to_json_string(self.client.search_all(&query, page).await.map_err(CoolapkError::from_string)?)
     }
 
+    /// 应用专项搜索(search/all 不含应用分组,应用走独立的 type=apk 搜索)。
+    pub async fn search_apks(&self, query: String, page: u32) -> UniResult<String> {
+        to_json_string(self.client.search_apks(&query, page).await.map_err(CoolapkError::from_string)?)
+    }
+
     // MARK: 通知
 
     /// 通知列表。notification_type: list(评论回复)/atMeList(@我)/

@@ -45,7 +45,7 @@ struct ContentView: View {
         }
     }
 
-    /// 右列:话题面板 → 详情 → 默认热榜挂件面板。
+    /// 右列:话题面板 → 详情 → 应用面板 → 默认热榜挂件面板。
     @ViewBuilder
     private var detailColumn: some View {
         if case .feed = model.entry {
@@ -53,6 +53,8 @@ struct ContentView: View {
                 TopicPanelView(model: model)
             } else if model.selectedFeedID != nil {
                 FeedDetailView(model: model)
+            } else if model.selectedApkPackage != nil {
+                ApkDetailPanelView(model: model)
             } else {
                 HotPanel(model: model)
             }
@@ -354,6 +356,10 @@ struct FeedListView: View {
                             case .feed:
                                 if let feedID = item.feedID {
                                     Task { await model.select(feedID: feedID) }
+                                }
+                            case .apk:
+                                if let packageName = item.apkPackage {
+                                    Task { await model.selectApk(packageName: packageName) }
                                 }
                             case .user:
                                 break // 用户主页未实现

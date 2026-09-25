@@ -425,9 +425,17 @@ final class AppModel {
         isSearching = true
         defer { isSearching = false }
         searchStatusText = ""
+        // search/all 只有话题/数码/用户/帖子;应用分组来自独立的 type=apk 搜索
+        async let allTask = api.searchAll(query: query, page: 1)
+        async let apkTask = api.searchApks(query: query, page: 1)
         do {
-            let json = try await api.searchAll(query: query, page: 1)
-            let sections = SearchResultSection.parse(fromJSONString: json)
+            var sections = SearchResultSection.parse(fromJSONString: try await allTask)
+            if let apkJSON = try? await apkTask {
+                let apps = SearchResultSection.parseApkList(fromJSONString: apkJSON)
+                if !apps.isEmpty {
+                    sections.insert(SearchResultSection(title: "应用", items: apps), at: 0)
+                }
+            }
             searchSections = sections
             if sections.isEmpty { searchStatusText = "没有找到相关内容" }
         } catch let error as CoolapkError {
@@ -441,13 +449,16 @@ final class AppModel {
         searchSections = nil
         searchStatusText = ""
         searchQuery = ""
-        // 退出搜索时连带清掉详情/话题栈,否则右列会残留搜索期间打开的僵尸面板
+        // 退出搜索时连带清掉详情/话题/应用栈,否则右列会残留搜索期间打开的僵尸面板
         selectedFeedID = nil
         detail = nil
         detailError = nil
         replies = []
         selectedTopicTag = nil
         topicFeeds = []
+        selectedApkPackage = nil
+        apkDetail = nil
+        apkDetailError = ""
     }
 
     /// 搜索结果里打开的动态不在 feeds 列表中,风控降级时从搜索结果里找摘要。
@@ -838,6 +849,59 @@ final class AppModel {
         await loadPersonalList(reset: false)
     }
 
+    // MARK: 应用详情(搜索 APK 结果点入)
+
+    var selectedApkPackage: String? {
+        didSet {
+            guard selectedApkPackage != oldValue else { return }
+            apkDetail = nil
+            apkDetailError = ""
+        }
+    }
+    private(set) var apkDetail: ApkDetail?
+    private(set) var apkDetailError = ""
+
+    /// 打开应用详情:同时清掉话题/动态栈(右列一次只显示一种面板)。
+    func selectApk(packageName: String) async {
+        guard selectedApkPackage != packageName else { return }
+        selectedApkPackage = packageName
+        selectedTopicTag = nil
+        topicFeeds = []
+        selectedFeedID = nil
+        detail = nil
+        detailError = nil
+        replies = []
+        await loadApkDetail()
+    }
+
+    func closeApkDetail() {
+        selectedApkPackage = nil
+        apkDetail = nil
+        apkDetailError = ""
+    }
+
+    private func loadApkDetail() async {
+        guard let packageName = selectedApkPackage else { return }
+        do {
+            let json = try await api.getAppDetail(packageName: packageName)
+            guard selectedApkPackage == packageName else { return }
+            apkDetail = ApkDetail.parse(fromJSONString: json)
+            if apkDetail == nil { apkDetailError = "详情解析失败" }
+        } catch let error as CoolapkError {
+            guard selectedApkPackage == packageName else { return }
+            if case .Failed(let message) = error { apkDetailError = Self.friendlyError(message) }
+        } catch {
+            guard selectedApkPackage == packageName else { return }
+            apkDetailError = error.localizedDescription
+        }
+    }
+
+    /// 下载当前应用详情对应的 APK(解析官方直链入下载队列)。
+    func downloadSelectedApk() async {
+        guard let packageName = selectedApkPackage else { return }
+        await startDownload(packageName: packageName)
+    }
+
     // MARK: APK 下载
 
     let downloads = DownloadManager.shared
@@ -847,6 +911,10 @@ final class AppModel {
     func resolveAndDownload() async {
         let packageName = newPackageName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !packageName.isEmpty else { return }
+        await startDownload(packageName: packageName)
+    }
+
+    private func startDownload(packageName: String) async {
         do {
             let json = try await api.resolveLatestApkDownload(packageName: packageName)
             guard let data = json.data(using: .utf8),
