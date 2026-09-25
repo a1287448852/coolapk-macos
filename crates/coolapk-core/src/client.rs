@@ -1829,6 +1829,15 @@ impl CoolapkClient {
         copy_first_field(&mut cleaned, obj, "collectionItem", &["collection_item_info", "collectionItemInfo", "collectionItem", "collection_item"]);
         copy_first_field(&mut cleaned, obj, "collectionItemId", &["collectionItemId", "collection_item_id", "itemId", "item_id"]);
 
+        // 转发动态的原帖对象:官方在 sourceFeed / forwardSourceFeed 下发,必须保留,
+        // 否则转发动态只剩转发理由、丢失被转发原帖(头像/正文/图)。
+        copy_first_field(&mut cleaned, obj, "sourceFeed", &["sourceFeed", "source_feed"]);
+        copy_first_field(&mut cleaned, obj, "forwardSourceFeed", &["forwardSourceFeed", "forward_source_feed"]);
+        copy_first_field(&mut cleaned, obj, "forwardType", &["forwardType", "forward_type"]);
+        copy_first_field(&mut cleaned, obj, "forwardid", &["forwardid", "forward_id"]);
+        // 动态位置/IP:raw 实体有 location,归一化未保留导致 Swift 位置芯片永远为空。
+        copy_first_field(&mut cleaned, obj, "location", &["location", "long_location"]);
+
         Some(cleaned)
     }
 

@@ -45,19 +45,19 @@ struct ContentView: View {
         }
     }
 
-    /// 右列:话题面板 → 详情 → 应用面板 → 默认热榜挂件面板。
+    /// 右列:话题面板 → 详情 → 应用面板 → 用户主页 → 默认热榜挂件面板。
+    /// 不限定 entry == .feed:通知/个人列表里点的动态/话题/用户也要能在右列打开。
+    /// 面板跨入口保留(Mail 式);退出搜索时由 clearSearch 统一清栈。
     @ViewBuilder
     private var detailColumn: some View {
-        if case .feed = model.entry {
-            if model.selectedTopicTag != nil {
-                TopicPanelView(model: model)
-            } else if model.selectedFeedID != nil {
-                FeedDetailView(model: model)
-            } else if model.selectedApkPackage != nil {
-                ApkDetailPanelView(model: model)
-            } else {
-                HotPanel(model: model)
-            }
+        if model.selectedTopicTag != nil {
+            TopicPanelView(model: model)
+        } else if model.selectedFeedID != nil {
+            FeedDetailView(model: model)
+        } else if model.selectedApkPackage != nil {
+            ApkDetailPanelView(model: model)
+        } else if model.selectedUserUID != nil {
+            UserPanelView(model: model)
         } else {
             HotPanel(model: model)
         }
@@ -168,7 +168,6 @@ struct SidebarView: View {
 
 struct FeedListView: View {
     @Bindable var model: AppModel
-    @State private var showPublishNotice = false
 
     private var currentTitle: String {
         model.isSearchActive ? "搜索结果" : model.category.rawValue
@@ -276,10 +275,11 @@ struct FeedListView: View {
             // 在 macOS 26 上尺寸失控,会渲染成巨型液态玻璃圆)
         }
         .refreshable { await model.refresh() }
-        .alert("发布动态", isPresented: $showPublishNotice) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text("发布动态功能开发中")
+        .sheet(isPresented: $model.showLoginSheet) {
+            LoginView(model: model)
+        }
+        .sheet(isPresented: $model.showComposer) {
+            ComposerView(model: model)
         }
         .task {
             await model.restoreSession()
@@ -297,11 +297,11 @@ struct FeedListView: View {
         }
     }
 
-    /// 绿色"发布动态":未登录引导登录,已登录提示功能开发中。
+    /// 绿色"发布动态":未登录引导登录,已登录打开发布弹窗。
     private var publishButton: some View {
         Button {
             if model.isLoggedIn {
-                showPublishNotice = true
+                model.showComposer = true
             } else {
                 model.showLoginSheet = true
             }
@@ -362,7 +362,9 @@ struct FeedListView: View {
                                     Task { await model.selectApk(packageName: packageName) }
                                 }
                             case .user:
-                                break // 用户主页未实现
+                                if let uid = item.userUID {
+                                    Task { await model.selectUser(uid: uid) }
+                                }
                             default:
                                 // 话题直接用标题;数码产品先匹配同名话题实体再进话题面板
                                 Task {
@@ -445,271 +447,6 @@ struct SearchResultRow: View {
         }
         .buttonStyle(.plain)
         .disabled(item.kind == .user)
-    }
-}
-
-// MARK: - 详情
-
-struct FeedDetailView: View {
-    @Bindable var model: AppModel
-
-    var body: some View {
-        Group {
-            if let detail = model.detail {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 10) {
-                            AvatarView(url: detail.avatarURL, size: 44)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(detail.username)
-                                    .font(.headline)
-                                HStack(spacing: 6) {
-                                    if !detail.deviceTitle.isEmpty {
-                                        Text(detail.deviceTitle)
-                                    }
-                                    Text(detail.dateline, format: .coolapkRelative)
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-
-                        Text(detail.attributedMessage)
-                            .font(.body)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if !detail.picURLs.isEmpty {
-                            PicGrid(urls: detail.picURLs)
-                        }
-
-                        DetailInteractionBar(model: model, detail: detail)
-
-                        Divider()
-
-                        commentSection
-                    }
-                    .padding(20)
-                    .frame(maxWidth: 720, alignment: .leading)
-                    .frame(maxWidth: .infinity)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composerBar
-                }
-            } else if model.isLoadingDetail {
-                ProgressView("加载详情…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.selectedFeedID != nil {
-                // 详情接口被风控(403 验证码)时:用列表实体的摘要渲染轻详情,
-                // 风控提示降级为一行小字,评论照常展示。
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if let item = model.feeds.first(where: { $0.id == model.selectedFeedID }) {
-                            HStack(spacing: 10) {
-                                AvatarView(url: item.avatarURL, size: 40)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.username)
-                                        .font(.headline)
-                                    Text(item.dateline, format: .coolapkRelative)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                            if !item.displayText.isEmpty {
-                                Text(item.displayText)
-                                    .font(.body)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            if !item.picURLs.isEmpty {
-                                PicGrid(urls: item.picURLs)
-                            }
-                            Divider()
-                        } else if let id = model.selectedFeedID,
-                                  let summary = model.searchItem(forFeedID: id) {
-                            // 从搜索结果打开的动态不在 feeds 列表:用搜索实体渲染摘要头部
-                            HStack(spacing: 10) {
-                                AvatarView(url: summary.avatarURL, size: 40)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(summary.title)
-                                        .font(.headline)
-                                        .lineLimit(1)
-                                    if !summary.subtitle.isEmpty {
-                                        Text(summary.subtitle)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                }
-                                Spacer()
-                            }
-                            Divider()
-                        }
-                        if let error = model.detailError, !error.isEmpty {
-                            Text("完整详情被风控拦截(\(error)),已显示摘要")
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        commentSection
-                    }
-                    .padding(20)
-                    .frame(maxWidth: 720, alignment: .leading)
-                    .frame(maxWidth: .infinity)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    composerBar
-                }
-            } else {
-                ContentUnavailableView(
-                    "选择一条动态",
-                    systemImage: "text.bubble",
-                    description: Text("从左侧列表选择一条动态查看详情和评论")
-                )
-            }
-        }
-        .navigationTitle("详情")
-    }
-
-    /// 评论区:互动状态提示(非空时) + 评论列表。
-    @ViewBuilder
-    private var commentSection: some View {
-        if let status = model.interactionStatus, !status.isEmpty {
-            Text(status)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        ReplyListView(model: model)
-    }
-
-    /// 底部评论输入条:登录后可发送;游客显示登录引导。
-    private var composerBar: some View {
-        HStack(spacing: 10) {
-            if model.isLoggedIn {
-                TextField("发表评论…", text: $model.replyDraft)
-                    .textFieldStyle(.roundedBorder)
-                Button("发送") {
-                    Task { await model.sendReply() }
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Color.coolapkGreen)
-                .disabled(model.replyDraft.isEmpty)
-            } else {
-                Button {
-                    model.showLoginSheet = true
-                } label: {
-                    Label("登录后可点赞与评论", systemImage: "person.crop.circle")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        .background(.bar)
-    }
-}
-
-/// 详情互动条:计数 + 点赞/收藏按钮(未登录禁用)。
-private struct DetailInteractionBar: View {
-    @Bindable var model: AppModel
-    let detail: FeedDetail
-
-    private var isLiked: Bool { model.likedFeedIDs.contains(detail.id) }
-    private var isFavorited: Bool { model.favoritedFeedIDs.contains(detail.id) }
-
-    var body: some View {
-        HStack(spacing: 20) {
-            StatLabel(systemImage: "hand.thumbsup", count: detail.likeCount)
-            StatLabel(systemImage: "bubble.right", count: detail.replyCount)
-            StatLabel(systemImage: "star", count: detail.favCount)
-            StatLabel(systemImage: "arrowshape.turn.up.right", count: detail.shareCount)
-
-            Spacer()
-
-            Button {
-                Task { await model.toggleLike() }
-            } label: {
-                Label(
-                    isLiked ? "已赞" : "点赞",
-                    systemImage: isLiked ? "hand.thumbsup.fill" : "hand.thumbsup"
-                )
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(isLiked ? Color.coolapkGreen : Color.secondary)
-            .disabled(!model.isLoggedIn)
-            .help(model.isLoggedIn ? "点赞" : "登录后可点赞")
-
-            Button {
-                Task { await model.toggleFavorite() }
-            } label: {
-                Label(
-                    isFavorited ? "已收藏" : "收藏",
-                    systemImage: isFavorited ? "bookmark.fill" : "bookmark"
-                )
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(isFavorited ? Color.coolapkGreen : Color.secondary)
-            .disabled(!model.isLoggedIn)
-            .help(model.isLoggedIn ? "收藏" : "登录后可收藏")
-        }
-        .font(.callout)
-        .padding(.vertical, 6)
-    }
-}
-
-struct ReplyListView: View {
-    let model: AppModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("评论 \(model.replies.count)")
-                .font(.headline)
-
-            ForEach(model.replies) { reply in
-                HStack(alignment: .top, spacing: 10) {
-                    AvatarView(url: reply.avatarURL, size: 30)
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(reply.username)
-                                .font(.callout.weight(.medium))
-                            Spacer(minLength: 8)
-                            Text(reply.dateline, format: .coolapkRelative)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                        }
-                        Text(reply.message)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                        StatLabel(systemImage: "hand.thumbsup", count: reply.likeCount)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 2)
-
-                Divider()
-            }
-
-            if model.replies.isEmpty && model.isLoadingDetail {
-                ProgressView()
-            }
-
-            if !model.replies.isEmpty {
-                Button {
-                    Task { await model.loadReplies(reset: false) }
-                } label: {
-                    if model.isLoadingMoreReplies {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("加载更多评论")
-                    }
-                }
-                .buttonStyle(.borderless)
-                .disabled(model.isLoadingMoreReplies)
-            }
-        }
     }
 }
 
@@ -830,58 +567,6 @@ struct StatLabel: View {
 
     var body: some View {
         Label(count == 0 ? "" : "\(count)", systemImage: systemImage)
-    }
-}
-
-/// 旧版列表行:保留给潜在外部引用(搜索结果等已改用 FeedCardView)。
-struct FeedRowView: View {
-    let feed: FeedItem
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            AvatarView(url: feed.avatarURL, size: 36)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
-                    if !feed.username.isEmpty {
-                        Text(feed.username)
-                            .font(.callout.weight(.semibold))
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
-                    if feed.hasValidDateline {
-                        Text(feed.dateline, format: .coolapkRelative)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                }
-
-                if !feed.displayText.isEmpty {
-                    Text(feed.displayText)
-                        .font(.subheadline)
-                        .lineLimit(3)
-                }
-
-                if !feed.picURLs.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(feed.picURLs.prefix(3), id: \.absoluteString) { url in
-                            RemoteImage(url: url)
-                                .frame(width: 64, height: 64)
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                    }
-                }
-
-                HStack(spacing: 14) {
-                    StatLabel(systemImage: "hand.thumbsup", count: feed.likeCount)
-                    StatLabel(systemImage: "bubble.right", count: feed.replyCount)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 2)
     }
 }
 

@@ -47,3 +47,4 @@ macos/build/
 macos/Vendor/
 macos/Sources/CoolapkCoreSwift/
 macos/Sources/CoolapkCoreFFI/include/
+crates/coolapk-core/examples/dump_*.rs

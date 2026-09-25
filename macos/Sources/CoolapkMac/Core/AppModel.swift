@@ -220,11 +220,17 @@ final class AppModel {
     func openTopic(tag: String) async {
         guard selectedTopicTag != tag else { return }
         selectedTopicTag = tag
-        // 话题面板优先于详情:点话题即退出详情浏览
+        // 话题面板优先于其它详情:点话题即退出详情/应用/用户浏览
         selectedFeedID = nil
         detail = nil
         detailError = nil
         replies = []
+        selectedApkPackage = nil
+        apkDetail = nil
+        apkDetailError = ""
+        selectedUserUID = nil
+        userSpace = nil
+        userFeeds = []
         topicFeeds = []
         await loadTopicFeeds(reset: true)
     }
@@ -449,7 +455,7 @@ final class AppModel {
         searchSections = nil
         searchStatusText = ""
         searchQuery = ""
-        // 退出搜索时连带清掉详情/话题/应用栈,否则右列会残留搜索期间打开的僵尸面板
+        // 退出搜索时连带清掉详情/话题/应用/用户栈,否则右列会残留搜索期间打开的僵尸面板
         selectedFeedID = nil
         detail = nil
         detailError = nil
@@ -459,6 +465,9 @@ final class AppModel {
         selectedApkPackage = nil
         apkDetail = nil
         apkDetailError = ""
+        selectedUserUID = nil
+        userSpace = nil
+        userFeeds = []
     }
 
     /// 搜索结果里打开的动态不在 feeds 列表中,风控降级时从搜索结果里找摘要。
@@ -480,9 +489,15 @@ final class AppModel {
     func select(feedID: String) async {
         guard selectedFeedID != feedID else { return }
         selectedFeedID = feedID
-        // 详情优先于话题面板:点卡片即退出话题浏览
+        // 详情优先于其它面板:点卡片即退出话题/应用/用户浏览
         selectedTopicTag = nil
         topicFeeds = []
+        selectedApkPackage = nil
+        apkDetail = nil
+        apkDetailError = ""
+        selectedUserUID = nil
+        userSpace = nil
+        userFeeds = []
         detail = nil
         detailError = nil
         replies = []
@@ -617,6 +632,117 @@ final class AppModel {
             sum + ((payload[key] as? NSNumber)?.intValue ?? 0)
         }
         return min(total, 99)
+    }
+
+    // MARK: 发布动态
+
+    var showComposer = false
+    var publishDraft = ""
+    private(set) var isPublishingFeed = false
+    private(set) var publishStatus: String?
+
+    func clearPublishStatus() {
+        publishStatus = nil
+    }
+
+    /// 发布文字动态(图片上传链路未接,pic 传 nil;成功后回首页刷新)。
+    func publishFeed() async {
+        let message = publishDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isLoggedIn, !message.isEmpty, !isPublishingFeed else { return }
+        isPublishingFeed = true
+        defer { isPublishingFeed = false }
+        do {
+            _ = try await api.createFeed(message: message, pic: nil, postToken: nil)
+            publishDraft = ""
+            publishStatus = nil
+            showComposer = false
+            if case .feed(let category) = entry, category != .home {
+                entry = .feed(.home)
+            } else {
+                await refresh()
+            }
+        } catch let error as CoolapkError {
+            if case .Failed(let failure) = error { publishStatus = Self.friendlyError(failure) }
+        } catch {
+            publishStatus = error.localizedDescription
+        }
+    }
+
+    // MARK: 用户主页(搜索用户点入)
+
+    var selectedUserUID: String? {
+        didSet {
+            guard selectedUserUID != oldValue else { return }
+            userSpace = nil
+            userSpaceError = ""
+            userFeeds = []
+        }
+    }
+    private(set) var userSpace: UserSpace?
+    private(set) var userSpaceError = ""
+    private(set) var userFeeds: [FeedItem] = []
+    private var userPage = 1
+    private var isLoadingUserFeeds = false
+
+    /// 打开用户主页:右列一次一种面板,先清掉话题/动态/应用栈。
+    func selectUser(uid: String) async {
+        guard selectedUserUID != uid else { return }
+        selectedUserUID = uid
+        selectedTopicTag = nil
+        topicFeeds = []
+        selectedFeedID = nil
+        detail = nil
+        detailError = nil
+        replies = []
+        selectedApkPackage = nil
+        apkDetail = nil
+        apkDetailError = ""
+        await loadUserSpace()
+        await loadUserFeeds(reset: true)
+    }
+
+    func closeUserProfile() {
+        selectedUserUID = nil
+        userSpace = nil
+        userSpaceError = ""
+        userFeeds = []
+    }
+
+    private func loadUserSpace() async {
+        guard let uid = selectedUserUID else { return }
+        do {
+            let json = try await api.getUserSpace(uid: uid)
+            guard selectedUserUID == uid else { return }
+            userSpace = UserSpace.parse(fromJSONString: json)
+        } catch let error as CoolapkError {
+            guard selectedUserUID == uid else { return }
+            if case .Failed(let message) = error { userSpaceError = Self.friendlyError(message) }
+        } catch {
+            guard selectedUserUID == uid else { return }
+            userSpaceError = error.localizedDescription
+        }
+    }
+
+    func loadUserFeeds(reset: Bool) async {
+        guard let uid = selectedUserUID, !isLoadingUserFeeds else { return }
+        isLoadingUserFeeds = true
+        defer { isLoadingUserFeeds = false }
+        if reset { userPage = 1 }
+        do {
+            let json = try await api.getUserFeeds(uid: uid, page: UInt32(userPage), feedType: "feed")
+            guard selectedUserUID == uid else { return }
+            let parsed = CoolapkJSON.entities(fromJSONString: json)
+                .compactMap(FeedItem.init(entity:))
+            if reset {
+                userFeeds = parsed
+            } else {
+                let known = Set(userFeeds.map(\.id))
+                userFeeds += parsed.filter { !known.contains($0.id) }
+            }
+            if reset { userPage = 2 } else { userPage += 1 }
+        } catch {
+            // 用户动态拉取失败静默:列表空态兜底
+        }
     }
 
     // MARK: 私信
@@ -793,10 +919,12 @@ final class AppModel {
     private var isLoadingPersonal = false
 
     /// 切换个人列表类型:类型变化(或列表为空)时重新拉取,避免显示上一个列表的数据。
+    /// 历史实体不是动态(recentHistory,由 HistoryListView 自管),不走 loadPersonalList。
     func setPersonalKind(_ kind: PersonalListKind) {
         guard personalKind != kind || personalFeeds.isEmpty else { return }
         personalKind = kind
         personalFeeds = []
+        guard kind != .history else { return }
         Task { await loadPersonalList(reset: true) }
     }
 
@@ -871,6 +999,9 @@ final class AppModel {
         detail = nil
         detailError = nil
         replies = []
+        selectedUserUID = nil
+        userSpace = nil
+        userFeeds = []
         await loadApkDetail()
     }
 

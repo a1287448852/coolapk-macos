@@ -218,6 +218,36 @@ impl CoolapkApi {
         to_json_string(self.client.search_all(&query, page).await.map_err(CoolapkError::from_string)?)
     }
 
+    /// 发布动态(需登录)。pic 为已上传图片的 URL,文字动态传 None。
+    pub async fn create_feed(
+        &self,
+        message: String,
+        pic: Option<String>,
+        post_token: Option<String>,
+    ) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .create_feed(&message, pic.as_deref(), post_token.as_deref())
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
+    /// 用户主页(/v6/user/space:资料 + 统计)。
+    pub async fn get_user_space(&self, uid: String) -> UniResult<String> {
+        to_json_string(self.client.get_user_space(&uid).await.map_err(CoolapkError::from_string)?)
+    }
+
+    /// 用户动态列表(feed_type: feed/picture/reply/rating/fav)。
+    pub async fn get_user_feeds(&self, uid: String, page: u32, feed_type: String) -> UniResult<String> {
+        to_json_string(
+            self.client
+                .get_user_feeds(&uid, page, &feed_type)
+                .await
+                .map_err(CoolapkError::from_string)?,
+        )
+    }
+
     /// 应用专项搜索(search/all 不含应用分组,应用走独立的 type=apk 搜索)。
     pub async fn search_apks(&self, query: String, page: u32) -> UniResult<String> {
         to_json_string(self.client.search_apks(&query, page).await.map_err(CoolapkError::from_string)?)

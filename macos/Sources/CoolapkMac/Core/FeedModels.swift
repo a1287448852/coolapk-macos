@@ -85,6 +85,55 @@ enum CoolapkJSON {
 
 // MARK: - 模型
 
+/// 动态挂载的话题/产品标的(列表实体的 targetRow,详情接口同样携带)。
+/// targetType: topic(话题)/ product(数码产品)等,官方 app 在正文下方渲染标的卡。
+struct FeedRelatedTarget: Hashable {
+    let title: String
+    let subtitle: String
+    let logoURL: URL?
+    let kind: String
+
+    /// targetRow 为空或无标题时返回 nil(部分实体 targetRow 只是空壳)。
+    init?(entity: [String: Any]?) {
+        guard let entity,
+              let title = CoolapkJSON.string(entity["title"]), !title.isEmpty
+        else { return nil }
+        self.title = title
+        self.subtitle = CoolapkJSON.string(entity["subTitle"]) ?? ""
+        self.logoURL = CoolapkJSON.string(entity["logo"]).flatMap(CoolapkJSON.httpsURL)
+        self.kind = CoolapkJSON.string(entity["targetType"]) ?? ""
+    }
+}
+
+/// 被转发的原帖(转发动态里嵌套的原内容)。
+/// 字段来源:详情接口(raw)实体与列表 raw 的转发实体,原帖对象在
+/// `sourceFeed` / `forwardSourceFeed`(不同接口键名不一,都试);需 Rust 清洗放行后列表才有值。
+struct ForwardedFeed: Hashable {
+    let id: String
+    let username: String
+    let avatarURL: URL?
+    let message: String
+    let picURLs: [URL]
+    let dateline: Date
+
+    init?(entity: [String: Any]?) {
+        guard let entity, let id = CoolapkJSON.string(entity["id"]) else { return nil }
+        self.id = id
+        self.username = CoolapkJSON.username(entity)
+        self.avatarURL = CoolapkJSON.avatar(entity)
+        self.message = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["message"]) ?? "")
+        self.picURLs = CoolapkJSON.pics(entity)
+        self.dateline = Date(timeIntervalSince1970: TimeInterval(CoolapkJSON.int(entity["dateline"])))
+    }
+
+    /// 从外层动态实体里取出原帖对象(兼容 sourceFeed / forwardSourceFeed 两种键名)。
+    static func from(entity: [String: Any]) -> ForwardedFeed? {
+        let dict = (entity["sourceFeed"] as? [String: Any])
+            ?? (entity["forwardSourceFeed"] as? [String: Any])
+        return ForwardedFeed(entity: dict)
+    }
+}
+
 /// 信息流条目(列表用,容错解析)。
 struct FeedItem: Identifiable, Hashable {
     let id: String
@@ -101,6 +150,14 @@ struct FeedItem: Identifiable, Hashable {
     let deviceTitle: String
     let location: String
     let dateline: Date
+    /// 动态类型标签:动态/图文/二手/点评(feedTypeName),"动态"为空串不渲染。
+    let feedTypeName: String
+    /// 运营来源标记(infoHtml,如"来自头条推荐")。
+    let infoHtml: String
+    /// 转发的原帖(数据被 Rust 清洗放行后才有值,详情接口必有)。
+    let forward: ForwardedFeed?
+    /// 挂载的话题/产品标的(targetRow)。
+    let related: FeedRelatedTarget?
 
     init?(entity: [String: Any]) {
         guard let id = CoolapkJSON.string(entity["id"]) else { return nil }
@@ -124,8 +181,12 @@ struct FeedItem: Identifiable, Hashable {
         self.deviceTitle = CoolapkJSON.string(entity["deviceTitle"]) ?? ""
         self.location = CoolapkJSON.string(entity["location"]) ?? ""
         self.dateline = Date(timeIntervalSince1970: TimeInterval(CoolapkJSON.int(entity["dateline"])))
+        self.feedTypeName = CoolapkJSON.string(entity["feedTypeName"]) ?? ""
+        self.infoHtml = CoolapkJSON.string(entity["infoHtml"]) ?? ""
+        self.forward = ForwardedFeed.from(entity: entity)
+        self.related = FeedRelatedTarget(entity: entity["targetRow"] as? [String: Any])
         // 运营卡片等非内容实体:没有文本也没有图,跳过
-        if title.isEmpty && excerpt.isEmpty && picURLs.isEmpty { return nil }
+        if title.isEmpty && excerpt.isEmpty && picURLs.isEmpty && forward == nil { return nil }
     }
 
     /// 展示主文本:优先标题,否则正文摘要。
@@ -216,6 +277,8 @@ struct SearchResultItem: Identifiable, Hashable {
     let feedID: String?
     /// 应用实体的包名(kind == .apk 时用于拉详情与下载)。
     let apkPackage: String?
+    /// 用户实体的 uid(kind == .user 时用于打开用户主页)。
+    let userUID: String?
 
     init?(entity: [String: Any]) {
         let rawKind = (CoolapkJSON.string(entity["entityType"]) ?? "").lowercased()
@@ -278,6 +341,9 @@ struct SearchResultItem: Identifiable, Hashable {
         apkPackage = kind == .apk
             ? CoolapkJSON.string(entity["apkname"]) ?? CoolapkJSON.string(entity["packageName"])
             : nil
+        userUID = kind == .user
+            ? CoolapkJSON.string(entity["uid"]) ?? CoolapkJSON.string(entity["id"])
+            : nil
         if finalTitle.isEmpty && kind != .feed { return nil }
         if kind == .feed && finalTitle.isEmpty && CoolapkJSON.pics(entity).isEmpty { return nil }
     }
@@ -325,7 +391,7 @@ struct ApkDetail: Identifiable {
     }
 }
 
-/// 帖子详情(完整实体)。
+/// 帖子详情(完整实体,/v6/feed/detail 是 raw 数据,字段最全)。
 struct FeedDetail: Identifiable {
     let id: String
     let username: String
@@ -338,7 +404,12 @@ struct FeedDetail: Identifiable {
     let favCount: Int
     let shareCount: Int
     let dateline: Date
-    let relatedTitle: String
+    /// 转发的原帖:详情接口实体自带 forwardSourceFeed 对象。
+    let forward: ForwardedFeed?
+    /// 挂载的话题/产品标的(targetRow;relatedTitle 即其 title,详情页渲染标的卡)。
+    let related: FeedRelatedTarget?
+
+    var relatedTitle: String { related?.title ?? "" }
 
     /// 详情正文:推荐流实体常带 markdown(**加粗**、# 标题),能解析就富文本渲染。
     var attributedMessage: AttributedString {
@@ -369,8 +440,6 @@ struct FeedDetail: Identifiable {
         }
         guard let id = CoolapkJSON.string(entity["id"]) else { return nil }
 
-        let related = (entity["targetRow"] as? [String: Any]).flatMap { CoolapkJSON.string($0["title"]) } ?? ""
-
         return FeedDetail(
             id: id,
             username: CoolapkJSON.username(entity),
@@ -383,12 +452,13 @@ struct FeedDetail: Identifiable {
             favCount: CoolapkJSON.int(entity["favnum"]),
             shareCount: CoolapkJSON.int(entity["sharenum"]),
             dateline: Date(timeIntervalSince1970: TimeInterval(CoolapkJSON.int(entity["dateline"]))),
-            relatedTitle: related
+            forward: ForwardedFeed.from(entity: entity),
+            related: FeedRelatedTarget(entity: entity["targetRow"] as? [String: Any])
         )
     }
 }
 
-/// 回复条目。
+/// 回复条目(带楼中楼:replyRows 内嵌子回复,replyRowsCount + replyRowsMore 为总数)。
 struct ReplyItem: Identifiable, Hashable {
     let id: String
     let username: String
@@ -396,14 +466,33 @@ struct ReplyItem: Identifiable, Hashable {
     let message: String
     let likeCount: Int
     let dateline: Date
+    let deviceTitle: String
+    let location: String
+    let picURLs: [URL]
+    /// 内嵌子回复(接口直接下发,就地展开)。
+    let subReplies: [ReplyItem]
+    /// 子回复总数:内嵌条数 + 未下发条数。
+    let subReplyCount: Int
+    /// 未内嵌下发的子回复条数(>0 表示官方还有更多,需 Rust 侧子回复分页接口才能加载)。
+    let subReplyMore: Int
 
-    init?(entity: [String: Any]) {
-        guard let id = CoolapkJSON.string(entity["id"]) else { return nil }
+    var subReplyTotal: Int { subReplyCount + subReplyMore }
+
+    init?(entity: [String: Any]?) {
+        guard let entity, let id = CoolapkJSON.string(entity["id"]) else { return nil }
         self.id = id
         self.username = CoolapkJSON.username(entity)
         self.avatarURL = CoolapkJSON.avatar(entity)
         self.message = CoolapkJSON.cleanHTML(CoolapkJSON.string(entity["message"]) ?? "")
         self.likeCount = CoolapkJSON.int(entity["likenum"])
         self.dateline = Date(timeIntervalSince1970: TimeInterval(CoolapkJSON.int(entity["dateline"])))
+        self.deviceTitle = CoolapkJSON.string(entity["deviceTitle"]) ?? ""
+        self.location = CoolapkJSON.string(entity["ipLocation"]) ?? ""
+        self.picURLs = CoolapkJSON.pics(entity)
+        self.subReplies = ((entity["replyRows"] as? [Any]) ?? [])
+            .compactMap { $0 as? [String: Any] }
+            .compactMap(ReplyItem.init(entity:))
+        self.subReplyCount = CoolapkJSON.int(entity["replyRowsCount"])
+        self.subReplyMore = CoolapkJSON.int(entity["replyRowsMore"])
     }
 }
