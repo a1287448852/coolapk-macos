@@ -128,11 +128,15 @@ struct FeedItem: Identifiable, Hashable {
         if title.isEmpty && excerpt.isEmpty && picURLs.isEmpty { return nil }
     }
 
-    /// 展示主文本:优先标题,否则正文摘要;"XX 的动态"占位不展示。
+    /// 展示主文本:优先标题,否则正文摘要。
+    /// 快讯等实体的 title 是服务端拼的"{username}的动态"占位,真文案在 message:
+    /// title 是占位时回落到正文,两者都是占位才返回空。
     var displayText: String {
-        let candidate = title.isEmpty ? excerpt : title
-        if Self.isStubText(candidate) { return "" }
-        return candidate
+        let primary = title.isEmpty ? excerpt : title
+        if !Self.isStubText(primary) { return primary }
+        let fallback = primary == title ? excerpt : title
+        if !Self.isStubText(fallback) { return fallback }
+        return ""
     }
 
     private static func isStubText(_ text: String) -> Bool {

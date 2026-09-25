@@ -35,6 +35,39 @@ final class PersonalTests: XCTestCase {
         XCTAssertTrue(items.isEmpty, "缺 note 的实体应被过滤,实际 \(items.count) 条")
     }
 
+    // MARK: 快讯实体文案(title 占位回落 message)
+
+    /// 快讯实体的 title 是服务端拼的"{username}的动态"占位,真文案在 message;
+    /// displayText 必须回落,否则卡片只剩图片(2026-09-25 线上回归)。
+    func testFeedDisplayTextFallsBackToMessageWhenTitleIsStub() throws {
+        let entity: [String: Any] = [
+            "id": "46000001",
+            "username": "Iris向前冲",
+            "title": "Iris向前冲的动态",
+            "message": "给键盘也过上了中秋节🐰节日快乐宝子们！<a class=\"feed-link-tag\" href=\"https://www.coolapk.com\">#小艺输入法#</a>",
+            "picArr": ["http://image.coolapk.com/a.jpg"],
+            "dateline": 1_789_700_000,
+        ]
+        let feed = try XCTUnwrap(FeedItem(entity: entity))
+        XCTAssertEqual(
+            feed.displayText,
+            "给键盘也过上了中秋节🐰节日快乐宝子们！#小艺输入法#",
+            "title 为占位时应展示 message 清理后的正文"
+        )
+    }
+
+    func testFeedDisplayTextKeepsRealTitle() throws {
+        let entity: [String: Any] = [
+            "id": "46000002",
+            "username": "甲",
+            "title": "广州首出小米18promax 16加512g白色",
+            "message": "全新拆封,少1200",
+            "dateline": 1_789_700_000,
+        ]
+        let feed = try XCTUnwrap(FeedItem(entity: entity))
+        XCTAssertEqual(feed.displayText, "广州首出小米18promax 16加512g白色", "真实标题应优先展示")
+    }
+
     // MARK: 私信会话
 
     func testChatUserParseList() throws {
